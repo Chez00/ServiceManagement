@@ -1,37 +1,42 @@
 const knex = require('knex');
+require('dotenv').config();
+
+// Парсим DATABASE_URL для извлечения параметров
+const url = new URL(process.env.DATABASE_URL);
+
+console.log('🔍 Подключение к Supabase PostgreSQL...');
+console.log('Host:', url.hostname);
+console.log('Database:', url.pathname.slice(1));
 
 const db = knex({
-  client: 'mysql2',
+  client: 'pg',
   connection: {
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT) || 3306,
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'ServiceManagement',
-    charset: 'utf8mb4'
+    host: url.hostname,
+    port: url.port || 5432,
+    user: url.username,
+    password: url.password,
+    database: url.pathname.slice(1), // Убираем первый слеш
+    ssl: {
+      rejectUnauthorized: false
+    }
   },
   pool: {
     min: 2,
     max: 10,
     afterCreate: (conn, done) => {
-      conn.query("SET SESSION sql_mode=(SELECT REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY', ''))", (err) => {
-        if (err) {
-          console.error('Failed to set SQL mode:', err);
-        }
-        conn.query('SET NAMES utf8mb4', (err) => {
-          done(err, conn);
-        });
-      });
+      console.log('✅ Соединение с БД установлено');
+      done(null, conn);
     }
   }
 });
 
+// Проверка подключения
 db.raw('SELECT 1')
   .then(() => {
-    console.log('Подключение к базе данных успешно установлено!');
+    console.log('✅ Подключение к базе данных успешно установлено!');
   })
   .catch((err) => {
-    console.error('Не получилось подключиться к базе данных:', err.message);
+    console.error('❌ Не получилось подключиться к базе данных:', err.message);
   });
 
 module.exports = db;
