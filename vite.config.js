@@ -29,7 +29,7 @@ export default defineConfig({
       input: path.resolve(__dirname, 'public/index.html'),
       output: {
         manualChunks: {
-          'vue-vendor': ['vue', 'vue-router']
+          'vue-vendor': ['vue']
         }
       }
     }
