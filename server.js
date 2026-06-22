@@ -29,7 +29,11 @@ app.use(helmet({
 
 // CORS
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  origin: [
+    process.env.CORS_ORIGIN || 'http://localhost:5173',
+    'http://localhost:3000',
+    process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ybnlzxhnakdzkcqibebn.supabase.co'
+  ].filter(Boolean),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -37,8 +41,8 @@ app.use(cors({
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 1000,
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1000,
   message: {
     status: 'error',
     message: 'Too many requests'
@@ -71,13 +75,27 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/performers', performerRoutes);
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'success',
-    message: 'API is running',
-    timestamp: new Date().toISOString()
-  });
+// Health check с информацией о подключении
+app.get('/api/health', async (req, res) => {
+  try {
+    const db = require('./src/config/database');
+    await db.raw('SELECT 1');
+    
+    res.json({
+      status: 'success',
+      message: 'API is running',
+      database: 'connected',
+      environment: process.env.NODE_ENV || 'development',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'API is running but database connection failed',
+      error: process.env.NODE_ENV === 'production' ? 'Database error' : error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // 404 для API
@@ -92,7 +110,6 @@ app.use('/api/*', (req, res) => {
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   
-  // Обработка ошибок валидации
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({
       status: 'error',
@@ -115,6 +132,7 @@ app.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 API available at http://localhost:${PORT}/api`);
+  console.log(`🗄️ Database: ${process.env.POSTGRES_HOST || process.env.DB_HOST || 'Not configured'}`);
 });
 
 // Обработка необработанных ошибок
