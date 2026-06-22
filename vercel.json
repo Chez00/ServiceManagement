@@ -1,15 +1,9 @@
 {
   "version": 2,
-  "buildCommand": "npm run build:frontend",
-  "outputDirectory": "public/dist",
   "builds": [
     {
       "src": "server.js",
       "use": "@vercel/node"
-    },
-    {
-      "src": "public/dist/**",
-      "use": "@vercel/static"
     }
   ],
   "routes": [
@@ -18,24 +12,8 @@
       "dest": "server.js"
     },
     {
-      "src": "/assets/(.*)",
-      "dest": "public/dist/assets/$1"
-    },
-    {
-      "src": "/favicon.ico",
-      "dest": "public/dist/favicon.ico"
-    },
-    {
-      "src": "/favicon.svg",
-      "dest": "public/dist/favicon.svg"
-    },
-    {
-      "src": "/(.*\\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|txt|xml|webp|webm|mp4))",
-      "dest": "public/dist/$1"
-    },
-    {
       "src": "/(.*)",
-      "dest": "public/dist/index.html"
+      "dest": "server.js"
     }
   ],
   "env": {
