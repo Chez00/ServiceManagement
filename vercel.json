@@ -26,7 +26,11 @@
       "dest": "public/dist/favicon.ico"
     },
     {
-      "src": "/(.*\\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|txt|xml))",
+      "src": "/favicon.svg",
+      "dest": "public/dist/favicon.svg"
+    },
+    {
+      "src": "/(.*\\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json|txt|xml|webp|webm|mp4))",
       "dest": "public/dist/$1"
     },
     {

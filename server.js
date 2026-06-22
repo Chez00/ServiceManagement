@@ -7,6 +7,7 @@ const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
 
 // Import routes
 const authRoutes = require('./src/routes/auth');
@@ -22,31 +23,25 @@ const performerRoutes = require('./src/routes/performers');
 // Initialize express
 const app = express();
 
-// Basic security
+// Basic security (ослабляем для Vercel)
 app.use(helmet({
   contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: false
 }));
 
-// CORS для разработки
-if (process.env.NODE_ENV !== 'production') {
-  app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000'],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-  }));
-}
-
-// Rate limiting для API
-const apiLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1000,
-  message: {
-    status: 'error',
-    message: 'Too many requests'
-  }
-});
+// CORS
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://service-management-pink.vercel.app',
+    'https://service-management-eqdf.vercel.app'
+  ].filter(Boolean),
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
@@ -54,13 +49,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 app.use(compression());
 
-// Логирование в разработке
-if (process.env.NODE_ENV !== 'production') {
-  app.use(morgan('dev'));
-}
-
 // API Routes
-app.use('/api/auth', apiLimiter, authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/work-orders', workOrderRoutes);
 app.use('/api/assets', assetRoutes);
@@ -87,7 +77,7 @@ app.get('/api/health', async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'API is running but database connection failed',
-      error: process.env.NODE_ENV === 'production' ? 'Database error' : error.message
+      environment: process.env.NODE_ENV || 'development'
     });
   }
 });
@@ -96,20 +86,47 @@ app.get('/api/health', async (req, res) => {
 if (process.env.NODE_ENV === 'production') {
   const frontendPath = path.join(__dirname, 'public', 'dist');
   
-  console.log('📦 Serving static files from:', frontendPath);
+  console.log('📦 Static files path:', frontendPath);
+  console.log('📂 Directory exists:', fs.existsSync(frontendPath));
   
-  app.use(express.static(frontendPath, {
-    maxAge: '1y',
-    etag: true,
-    lastModified: true
-  }));
-  
-  // Все не-API запросы направляем на index.html (SPA)
-  app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(frontendPath, 'index.html'));
-    }
-  });
+  if (fs.existsSync(frontendPath)) {
+    console.log('📋 Files in dist:', fs.readdirSync(frontendPath));
+    
+    // Отдаем статические файлы
+    app.use(express.static(frontendPath, {
+      maxAge: '1y',
+      etag: true,
+      lastModified: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      }
+    }));
+    
+    // Все не-API запросы направляем на index.html (SPA)
+    app.get('*', (req, res) => {
+      if (!req.path.startsWith('/api')) {
+        const indexPath = path.join(frontendPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          console.error('❌ index.html not found at:', indexPath);
+          res.status(404).send('Frontend not built. index.html not found.');
+        }
+      }
+    });
+  } else {
+    console.error('❌ Frontend dist folder not found at:', frontendPath);
+    app.get('*', (req, res) => {
+      if (!req.path.startsWith('/api')) {
+        res.status(404).json({
+          error: 'Frontend not built',
+          message: 'Run npm run build:frontend first'
+        });
+      }
+    });
+  }
 }
 
 // 404 для API
@@ -123,19 +140,9 @@ app.use('/api/*', (req, res) => {
 // Error handling
 app.use((err, req, res, next) => {
   console.error('❌ Error:', err);
-  
-  if (err.type === 'entity.parse.failed') {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Invalid JSON'
-    });
-  }
-  
   res.status(err.status || 500).json({
     status: 'error',
-    message: process.env.NODE_ENV === 'production' 
-      ? 'Internal Server Error' 
-      : err.message
+    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message
   });
 });
 
@@ -143,28 +150,7 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 API available at http://localhost:${PORT}/api`);
-  
-  if (process.env.NODE_ENV === 'production') {
-    console.log(`🌐 Frontend served from http://localhost:${PORT}`);
-  } else {
-    console.log(`💡 Frontend dev server: http://localhost:5173`);
-  }
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('👋 SIGTERM received. Shutting down gracefully...');
-  process.exit(0);
-});
-
-process.on('unhandledRejection', (err) => {
-  console.error('❌ Unhandled Rejection:', err);
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:', err);
-  process.exit(1);
+  console.log(`📦 Frontend path: ${path.join(__dirname, 'public', 'dist')}`);
 });

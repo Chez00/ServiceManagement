@@ -4,15 +4,13 @@
   "description": "Service Management System",
   "main": "server.js",
   "scripts": {
-    "dev": "vite --config vite.config.js",
-    "dev:server": "node server.js",
-    "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
-    "build": "vite build --config vite.config.js",
-    "preview": "vite preview --config vite.config.js",
-    "start": "node server.js",
-    "migrate": "knex migrate:latest --knexfile knexfile.js",
-    "seed": "knex seed:run --knexfile knexfile.js",
-    "migrate:rollback": "knex migrate:rollback --knexfile knexfile.js"
+    "dev": "node server.js",
+    "dev:frontend": "vite",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\"",
+    "build:frontend": "vite build",
+    "build": "npm run build:frontend",
+    "start": "NODE_ENV=production node server.js",
+    "vercel-build": "npm run build:frontend && echo 'Build completed'"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
