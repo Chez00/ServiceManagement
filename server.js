@@ -136,6 +136,22 @@ app.use('/api/*', (req, res) => {
     message: 'API endpoint not found'
   });
 });
+// ВРЕМЕННО для отладки
+app.get('/api/debug', (req, res) => {
+  res.json({
+    environment: process.env.NODE_ENV,
+    hasPostgresPrismaUrl: !!process.env.POSTGRES_PRISMA_URL,
+    hasPostgresUrl: !!process.env.POSTGRES_URL,
+    hasPostgresUrlNonPooling: !!process.env.POSTGRES_URL_NON_POOLING,
+    hasDatabaseUrl: !!process.env.DATABASE_URL,
+    hasDbHost: !!process.env.DB_HOST,
+    // Показываем первые символы (безопасно)
+    postgresPrismaUrl: process.env.POSTGRES_PRISMA_URL ? 
+      process.env.POSTGRES_PRISMA_URL.substring(0, 30) + '...' : 'NOT SET',
+    postgresUrl: process.env.POSTGRES_URL ? 
+      process.env.POSTGRES_URL.substring(0, 30) + '...' : 'NOT SET'
+  });
+});
 
 // Error handling
 app.use((err, req, res, next) => {
