@@ -1,0 +1,30 @@
+{
+  "../node_modules/bootstrap-icons/font/fonts/bootstrap-icons.woff": {
+    "file": "assets/bootstrap-icons-BeopsB42.woff",
+    "src": "../node_modules/bootstrap-icons/font/fonts/bootstrap-icons.woff"
+  },
+  "../node_modules/bootstrap-icons/font/fonts/bootstrap-icons.woff2": {
+    "file": "assets/bootstrap-icons-mSm7cUeB.woff2",
+    "src": "../node_modules/bootstrap-icons/font/fonts/bootstrap-icons.woff2"
+  },
+  "_vue-vendor-CM3GskCG.js": {
+    "file": "assets/vue-vendor-CM3GskCG.js",
+    "name": "vue-vendor"
+  },
+  "index.html": {
+    "file": "assets/index-DwNuDVg1.js",
+    "name": "index",
+    "src": "index.html",
+    "isEntry": true,
+    "imports": [
+      "_vue-vendor-CM3GskCG.js"
+    ],
+    "css": [
+      "assets/index-V6rZsgGX.css"
+    ],
+    "assets": [
+      "assets/bootstrap-icons-mSm7cUeB.woff2",
+      "assets/bootstrap-icons-BeopsB42.woff"
+    ]
+  }
+}
