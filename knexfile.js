@@ -2,26 +2,18 @@ require('dotenv').config();
 
 module.exports = {
   development: {
-    client: 'mysql2',
+    client: 'pg',
     connection: {
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT) || 3306,
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '',
-      database: process.env.DB_NAME || 'ServiceManagement',
-      charset: 'utf8mb4'
+      host: process.env.DB_HOST || 'aws-1-us-east-1.pooler.supabase.com',
+      port: parseInt(process.env.DB_PORT) || 6543,
+      user: process.env.DB_USER || 'postgres.ybnlzxhnakdzkcqibebn',
+      password: process.env.DB_PASSWORD || 'T0hN5SQ&f6V9',
+      database: process.env.DB_NAME || 'postgres',
+      ssl: { rejectUnauthorized: false }
     },
     pool: {
       min: 2,
-      max: 10,
-      afterCreate: (conn, done) => {
-        conn.query("SET SESSION sql_mode=''", (err) => {
-          if (err) {
-            console.error('Failed to set SQL mode:', err);
-          }
-          done(err, conn);
-        });
-      }
+      max: 10
     },
     migrations: {
       tableName: 'knex_migrations',
@@ -32,14 +24,14 @@ module.exports = {
     }
   },
   production: {
-    client: 'mysql2',
+    client: 'pg',
     connection: {
-      host: process.env.DB_HOST,
-      port: parseInt(process.env.DB_PORT),
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME,
-      charset: 'utf8mb4'
+      host: process.env.DB_HOST || 'aws-1-us-east-1.pooler.supabase.com',
+      port: parseInt(process.env.DB_PORT) || 6543,
+      user: process.env.DB_USER || 'postgres.ybnlzxhnakdzkcqibebn',
+      password: process.env.DB_PASSWORD || 'T0hN5SQ&f6V9',
+      database: process.env.DB_NAME || 'postgres',
+      ssl: { rejectUnauthorized: false }
     },
     pool: {
       min: 2,
