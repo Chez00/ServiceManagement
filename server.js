@@ -7,7 +7,6 @@ const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const fs = require('fs');
 
 // Import routes
 const authRoutes = require('./src/routes/auth');
@@ -20,14 +19,15 @@ const departmentRoutes = require('./src/routes/departments');
 const categoryRoutes = require('./src/routes/categories');
 const performerRoutes = require('./src/routes/performers');
 
-// Initialize express
 const app = express();
 
-// Basic security (ослабляем для Vercel)
+// ✅ ВКЛЮЧАЕМ TRUST PROXY (обязательно для Vercel)
+app.set('trust proxy', 1);
+
+// Basic security
 app.use(helmet({
   contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false,
-  crossOriginResourcePolicy: false
+  crossOriginEmbedderPolicy: false
 }));
 
 // CORS
@@ -35,15 +35,27 @@ app.use(cors({
   origin: [
     'http://localhost:5173',
     'http://localhost:3000',
-    'https://service-management-pink.vercel.app',
-    'https://service-management-eqdf.vercel.app'
-  ].filter(Boolean),
+    'https://service-management-eqdf.vercel.app',
+    'https://service-management-pink.vercel.app'
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Middleware
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // ✅ Добавляем валидатор для Vercel
+  validate: { xForwardedForHeader: false }
+});
+
+app.use('/api/', limiter);
+
+// Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
@@ -60,113 +72,71 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/performers', performerRoutes);
 
+// Статус
+app.get('/api/status', async (req, res) => {
+  const status = {
+    server: 'running',
+    environment: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
+    env_vars: {
+      POSTGRES_PRISMA_URL: !!process.env.POSTGRES_PRISMA_URL,
+      POSTGRES_URL: !!process.env.POSTGRES_URL,
+      JWT_SECRET: !!process.env.JWT_SECRET
+    }
+  };
+
+  try {
+    const db = require('./src/config/database');
+    await db.raw('SELECT 1');
+    status.database = 'connected';
+  } catch (error) {
+    status.database = 'disconnected';
+    status.database_error = error.message;
+  }
+
+  res.json(status);
+});
+
 // Health check
 app.get('/api/health', async (req, res) => {
   try {
     const db = require('./src/config/database');
     await db.raw('SELECT 1');
-    
     res.json({
       status: 'success',
       message: 'API is running',
       database: 'connected',
-      environment: process.env.NODE_ENV || 'development',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
     res.status(500).json({
       status: 'error',
-      message: 'API is running but database connection failed',
-      environment: process.env.NODE_ENV || 'development'
+      message: 'API is running but database connection failed'
     });
   }
 });
 
-// В продакшене отдаем статические файлы фронтенда
+// Статика в продакшене
 if (process.env.NODE_ENV === 'production') {
   const frontendPath = path.join(__dirname, 'public', 'dist');
-  
-  console.log('📦 Static files path:', frontendPath);
-  console.log('📂 Directory exists:', fs.existsSync(frontendPath));
-  
-  if (fs.existsSync(frontendPath)) {
-    console.log('📋 Files in dist:', fs.readdirSync(frontendPath));
-    
-    // Отдаем статические файлы
-    app.use(express.static(frontendPath, {
-      maxAge: '1y',
-      etag: true,
-      lastModified: true,
-      setHeaders: (res, filePath) => {
-        if (filePath.endsWith('.html')) {
-          res.setHeader('Cache-Control', 'no-cache');
-        }
-      }
-    }));
-    
-    // Все не-API запросы направляем на index.html (SPA)
-    app.get('*', (req, res) => {
-      if (!req.path.startsWith('/api')) {
-        const indexPath = path.join(frontendPath, 'index.html');
-        if (fs.existsSync(indexPath)) {
-          res.sendFile(indexPath);
-        } else {
-          console.error('❌ index.html not found at:', indexPath);
-          res.status(404).send('Frontend not built. index.html not found.');
-        }
-      }
-    });
-  } else {
-    console.error('❌ Frontend dist folder not found at:', frontendPath);
-    app.get('*', (req, res) => {
-      if (!req.path.startsWith('/api')) {
-        res.status(404).json({
-          error: 'Frontend not built',
-          message: 'Run npm run build:frontend first'
-        });
-      }
-    });
-  }
+  app.use(express.static(frontendPath));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(frontendPath, 'index.html'));
+    }
+  });
 }
-
-// 404 для API
-app.use('/api/*', (req, res) => {
-  res.status(404).json({
-    status: 'error',
-    message: 'API endpoint not found'
-  });
-});
-// ВРЕМЕННО для отладки
-app.get('/api/debug', (req, res) => {
-  res.json({
-    environment: process.env.NODE_ENV,
-    hasPostgresPrismaUrl: !!process.env.POSTGRES_PRISMA_URL,
-    hasPostgresUrl: !!process.env.POSTGRES_URL,
-    hasPostgresUrlNonPooling: !!process.env.POSTGRES_URL_NON_POOLING,
-    hasDatabaseUrl: !!process.env.DATABASE_URL,
-    hasDbHost: !!process.env.DB_HOST,
-    // Показываем первые символы (безопасно)
-    postgresPrismaUrl: process.env.POSTGRES_PRISMA_URL ? 
-      process.env.POSTGRES_PRISMA_URL.substring(0, 30) + '...' : 'NOT SET',
-    postgresUrl: process.env.POSTGRES_URL ? 
-      process.env.POSTGRES_URL.substring(0, 30) + '...' : 'NOT SET'
-  });
-});
 
 // Error handling
 app.use((err, req, res, next) => {
-  console.error('❌ Error:', err);
+  console.error('Error:', err);
   res.status(err.status || 500).json({
     status: 'error',
     message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message
   });
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`📦 Frontend path: ${path.join(__dirname, 'public', 'dist')}`);
+  console.log(`Server running on port ${PORT}`);
 });

@@ -1,58 +1,60 @@
 const knex = require('knex');
 
-// Загружаем .env только в development
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
 function getDatabaseConfig() {
-  // Проверяем переменные Vercel/Supabase
-  if (process.env.POSTGRES_PRISMA_URL) {
-    console.log('📦 Using POSTGRES_PRISMA_URL');
+  // Проверяем все возможные переменные окружения
+  const connectionString = 
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    process.env.POSTGRES_URL ||
+    process.env.DATABASE_URL;
+
+  if (connectionString) {
+    console.log('Using connection string');
+    
+    // ✅ Исправляем SSL для Supabase
+    // Меняем sslmode=require на sslmode=no-verify для обхода проблемы с сертификатом
+    let fixedConnectionString = connectionString;
+    
+    // Заменяем sslmode=require на sslmode=no-verify
+    if (fixedConnectionString.includes('sslmode=require')) {
+      fixedConnectionString = fixedConnectionString.replace('sslmode=require', 'sslmode=no-verify');
+    }
+    
+    // Добавляем sslmode если его нет
+    if (!fixedConnectionString.includes('sslmode=')) {
+      fixedConnectionString += fixedConnectionString.includes('?') 
+        ? '&sslmode=no-verify' 
+        : '?sslmode=no-verify';
+    }
+    
     return {
-      connectionString: process.env.POSTGRES_PRISMA_URL,
-      ssl: { rejectUnauthorized: false }
+      connectionString: fixedConnectionString,
+      ssl: { 
+        rejectUnauthorized: false  // ✅ Отключаем строгую проверку сертификата
+      }
     };
   }
 
-  if (process.env.POSTGRES_URL_NON_POOLING) {
-    console.log('📦 Using POSTGRES_URL_NON_POOLING');
-    return {
-      connectionString: process.env.POSTGRES_URL_NON_POOLING,
-      ssl: { rejectUnauthorized: false }
-    };
-  }
-
-  if (process.env.POSTGRES_URL) {
-    console.log('📦 Using POSTGRES_URL');
-    return {
-      connectionString: process.env.POSTGRES_URL,
-      ssl: { rejectUnauthorized: false }
-    };
-  }
-
-  if (process.env.DATABASE_URL) {
-    console.log('📦 Using DATABASE_URL');
-    return {
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false }
-    };
-  }
-
-  // Локальные переменные
-  if (process.env.DB_HOST && process.env.DB_USER) {
-    console.log('📦 Using local DB config');
+  // Отдельные параметры
+  if (process.env.DB_HOST) {
+    console.log('Using separate params');
     return {
       host: process.env.DB_HOST,
-      port: process.env.DB_PORT || 5432,
+      port: parseInt(process.env.DB_PORT) || 5432,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME || 'postgres',
-      ssl: process.env.DB_HOST?.includes('supabase') ? { rejectUnauthorized: false } : false
+      ssl: { 
+        rejectUnauthorized: false  // ✅ Отключаем строгую проверку
+      }
     };
   }
 
-  console.error('❌ No database configuration found');
+  console.error('No database configuration found');
   return null;
 }
 
@@ -63,11 +65,7 @@ const db = knex({
   connection: dbConfig || {},
   pool: {
     min: 2,
-    max: 10,
-    afterCreate: (conn, done) => {
-      console.log('✅ New DB connection created');
-      done(null, conn);
-    }
+    max: 10
   }
 });
 
