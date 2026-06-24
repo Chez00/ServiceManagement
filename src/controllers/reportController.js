@@ -63,26 +63,25 @@ const getPerformanceReport = async (req, res) => {
     let query = db('Performer')
       .select(
         'Performer.performer_id',
-        db.raw("CONCAT(COALESCE(Foreman_User.last_name, ''), ' ', COALESCE(Foreman_User.first_name, '')) as performer_name")
+        db.raw("CONCAT(COALESCE(u.last_name, ''), ' ', COALESCE(u.first_name, '')) as performer_name")
       )
       .select(
-        db.raw('COUNT(WorkOrder.work_order_id) as total_orders'),
-        db.raw("COUNT(CASE WHEN WorkOrder.status = 'Выполнена' THEN 1 END) as completed_orders")
+        db.raw('COUNT(wo.work_order_id) as total_orders'),
+        db.raw("COUNT(CASE WHEN wo.status = 'Выполнена' THEN 1 END) as completed_orders")
       )
-      .leftJoin('WorkOrder', function() {
-        this.on('Performer.performer_id', 'WorkOrder.performer_id');
+      .leftJoin('WorkOrder AS wo', function() {
+        this.on('Performer.performer_id', 'wo.performer_id');
         
-        // Используем whereRaw для корректной передачи значений
         if (startDate) {
-          this.andOn(db.raw('"WorkOrder"."created_date" >= ?', [startDate]));
+          this.andOn(db.raw('"wo"."created_date" >= ?', [startDate]));
         }
         if (endDate) {
-          this.andOn(db.raw('"WorkOrder"."created_date" <= ?', [endDate + ' 23:59:59']));
+          this.andOn(db.raw('"wo"."created_date" <= ?', [endDate + ' 23:59:59']));
         }
       })
       .leftJoin('Foreman', 'Performer.foreman_id', 'Foreman.foreman_id')
-      .leftJoin('User as Foreman_User', 'Foreman.user_id', 'Foreman_User.user_id')
-      .groupBy('Performer.performer_id', 'Foreman_User.last_name', 'Foreman_User.first_name');
+      .leftJoin('User AS u', 'Foreman.user_id', 'u.user_id')
+      .groupBy('Performer.performer_id', 'u.last_name', 'u.first_name');
 
     const performers = await query;
 
@@ -112,18 +111,17 @@ const getAssetReport = async (req, res) => {
       .select(
         'Asset.model',
         'Asset.number',
-        db.raw('COUNT(WorkOrder.work_order_id) as total_orders'),
-        db.raw('MAX(WorkOrder.created_date) as last_order_date')
+        db.raw('COUNT(wo.work_order_id) as total_orders'),
+        db.raw('MAX(wo.created_date) as last_order_date')
       )
-      .leftJoin('WorkOrder', function() {
-        this.on('Asset.asset_id', 'WorkOrder.asset_id');
+      .leftJoin('WorkOrder AS wo', function() {
+        this.on('Asset.asset_id', 'wo.asset_id');
         
-        // Используем whereRaw для корректной передачи значений
         if (startDate) {
-          this.andOn(db.raw('"WorkOrder"."created_date" >= ?', [startDate]));
+          this.andOn(db.raw('"wo"."created_date" >= ?', [startDate]));
         }
         if (endDate) {
-          this.andOn(db.raw('"WorkOrder"."created_date" <= ?', [endDate + ' 23:59:59']));
+          this.andOn(db.raw('"wo"."created_date" <= ?', [endDate + ' 23:59:59']));
         }
       })
       .groupBy('Asset.asset_id', 'Asset.model', 'Asset.number')
@@ -152,19 +150,18 @@ const getCategoryReport = async (req, res) => {
     let query = db('Category')
       .select(
         'Category.name',
-        db.raw('COUNT(WorkOrder.work_order_id) as total_orders'),
-        db.raw("COUNT(CASE WHEN WorkOrder.status = 'Выполнена' THEN 1 END) as completed"),
-        db.raw("COUNT(CASE WHEN WorkOrder.status = 'Отменена' THEN 1 END) as cancelled")
+        db.raw('COUNT(wo.work_order_id) as total_orders'),
+        db.raw("COUNT(CASE WHEN wo.status = 'Выполнена' THEN 1 END) as completed"),
+        db.raw("COUNT(CASE WHEN wo.status = 'Отменена' THEN 1 END) as cancelled")
       )
-      .leftJoin('WorkOrder', function() {
-        this.on('Category.category_id', 'WorkOrder.category_id');
+      .leftJoin('WorkOrder AS wo', function() {
+        this.on('Category.category_id', 'wo.category_id');
         
-        // Используем whereRaw для корректной передачи значений
         if (startDate) {
-          this.andOn(db.raw('"WorkOrder"."created_date" >= ?', [startDate]));
+          this.andOn(db.raw('"wo"."created_date" >= ?', [startDate]));
         }
         if (endDate) {
-          this.andOn(db.raw('"WorkOrder"."created_date" <= ?', [endDate + ' 23:59:59']));
+          this.andOn(db.raw('"wo"."created_date" <= ?', [endDate + ' 23:59:59']));
         }
       })
       .groupBy('Category.category_id', 'Category.name')
