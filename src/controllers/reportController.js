@@ -72,12 +72,12 @@ const getPerformanceReport = async (req, res) => {
       .leftJoin('WorkOrder', function() {
         this.on('Performer.performer_id', 'WorkOrder.performer_id');
         
-        // Добавляем фильтры по датам в условие JOIN
+        // Используем whereRaw для корректной передачи значений
         if (startDate) {
-          this.andOn('WorkOrder.created_date', '>=', startDate);
+          this.andOn(db.raw('"WorkOrder"."created_date" >= ?', [startDate]));
         }
         if (endDate) {
-          this.andOn('WorkOrder.created_date', '<=', endDate + ' 23:59:59');
+          this.andOn(db.raw('"WorkOrder"."created_date" <= ?', [endDate + ' 23:59:59']));
         }
       })
       .leftJoin('Foreman', 'Performer.foreman_id', 'Foreman.foreman_id')
@@ -118,12 +118,12 @@ const getAssetReport = async (req, res) => {
       .leftJoin('WorkOrder', function() {
         this.on('Asset.asset_id', 'WorkOrder.asset_id');
         
-        // Добавляем фильтры по датам в условие JOIN
+        // Используем whereRaw для корректной передачи значений
         if (startDate) {
-          this.andOn('WorkOrder.created_date', '>=', startDate);
+          this.andOn(db.raw('"WorkOrder"."created_date" >= ?', [startDate]));
         }
         if (endDate) {
-          this.andOn('WorkOrder.created_date', '<=', endDate + ' 23:59:59');
+          this.andOn(db.raw('"WorkOrder"."created_date" <= ?', [endDate + ' 23:59:59']));
         }
       })
       .groupBy('Asset.asset_id', 'Asset.model', 'Asset.number')
@@ -159,12 +159,12 @@ const getCategoryReport = async (req, res) => {
       .leftJoin('WorkOrder', function() {
         this.on('Category.category_id', 'WorkOrder.category_id');
         
-        // Добавляем фильтры по датам в условие JOIN
+        // Используем whereRaw для корректной передачи значений
         if (startDate) {
-          this.andOn('WorkOrder.created_date', '>=', startDate);
+          this.andOn(db.raw('"WorkOrder"."created_date" >= ?', [startDate]));
         }
         if (endDate) {
-          this.andOn('WorkOrder.created_date', '<=', endDate + ' 23:59:59');
+          this.andOn(db.raw('"WorkOrder"."created_date" <= ?', [endDate + ' 23:59:59']));
         }
       })
       .groupBy('Category.category_id', 'Category.name')
