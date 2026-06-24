@@ -69,23 +69,20 @@ const getPerformanceReport = async (req, res) => {
         db.raw('COUNT(WorkOrder.work_order_id) as total_orders'),
         db.raw("COUNT(CASE WHEN WorkOrder.status = 'Выполнена' THEN 1 END) as completed_orders")
       )
-      .leftJoin('WorkOrder', 'Performer.performer_id', 'WorkOrder.performer_id')
+      .leftJoin('WorkOrder', function() {
+        this.on('Performer.performer_id', 'WorkOrder.performer_id');
+        
+        // Добавляем фильтры по датам в условие JOIN
+        if (startDate) {
+          this.andOn('WorkOrder.created_date', '>=', startDate);
+        }
+        if (endDate) {
+          this.andOn('WorkOrder.created_date', '<=', endDate + ' 23:59:59');
+        }
+      })
       .leftJoin('Foreman', 'Performer.foreman_id', 'Foreman.foreman_id')
-      .leftJoin('User as Foreman_User', 'Foreman.user_id', 'Foreman_User.user_id');
-
-    // Добавляем фильтры по датам через where
-    if (startDate) {
-      query = query.where('WorkOrder.created_date', '>=', startDate)
-                   .orWhereNull('WorkOrder.created_date');
-    }
-    if (endDate) {
-      query = query.where(function() {
-        this.where('WorkOrder.created_date', '<=', endDate + ' 23:59:59')
-            .orWhereNull('WorkOrder.created_date');
-      });
-    }
-
-    query = query.groupBy('Performer.performer_id', 'Foreman_User.last_name', 'Foreman_User.first_name');
+      .leftJoin('User as Foreman_User', 'Foreman.user_id', 'Foreman_User.user_id')
+      .groupBy('Performer.performer_id', 'Foreman_User.last_name', 'Foreman_User.first_name');
 
     const performers = await query;
 
@@ -114,31 +111,24 @@ const getAssetReport = async (req, res) => {
     let query = db('Asset')
       .select(
         'Asset.model',
-        'Asset.number'
-      )
-      .select(
+        'Asset.number',
         db.raw('COUNT(WorkOrder.work_order_id) as total_orders'),
         db.raw('MAX(WorkOrder.created_date) as last_order_date')
       )
-      .leftJoin('WorkOrder', 'Asset.asset_id', 'WorkOrder.asset_id');
-
-    // Фильтры по датам
-    if (startDate) {
-      query = query.where(function() {
-        this.where('WorkOrder.created_date', '>=', startDate)
-            .orWhereNull('WorkOrder.created_date');
-      });
-    }
-    if (endDate) {
-      query = query.where(function() {
-        this.where('WorkOrder.created_date', '<=', endDate + ' 23:59:59')
-            .orWhereNull('WorkOrder.created_date');
-      });
-    }
-
-    query = query.groupBy('Asset.asset_id', 'Asset.model', 'Asset.number')
-                 .orderBy('total_orders', 'desc')
-                 .limit(20);
+      .leftJoin('WorkOrder', function() {
+        this.on('Asset.asset_id', 'WorkOrder.asset_id');
+        
+        // Добавляем фильтры по датам в условие JOIN
+        if (startDate) {
+          this.andOn('WorkOrder.created_date', '>=', startDate);
+        }
+        if (endDate) {
+          this.andOn('WorkOrder.created_date', '<=', endDate + ' 23:59:59');
+        }
+      })
+      .groupBy('Asset.asset_id', 'Asset.model', 'Asset.number')
+      .orderBy('total_orders', 'desc')
+      .limit(20);
 
     const assets = await query;
 
@@ -160,30 +150,25 @@ const getCategoryReport = async (req, res) => {
     const { startDate, endDate } = req.query;
 
     let query = db('Category')
-      .select('Category.name')
       .select(
+        'Category.name',
         db.raw('COUNT(WorkOrder.work_order_id) as total_orders'),
         db.raw("COUNT(CASE WHEN WorkOrder.status = 'Выполнена' THEN 1 END) as completed"),
         db.raw("COUNT(CASE WHEN WorkOrder.status = 'Отменена' THEN 1 END) as cancelled")
       )
-      .leftJoin('WorkOrder', 'Category.category_id', 'WorkOrder.category_id');
-
-    // Фильтры по датам
-    if (startDate) {
-      query = query.where(function() {
-        this.where('WorkOrder.created_date', '>=', startDate)
-            .orWhereNull('WorkOrder.created_date');
-      });
-    }
-    if (endDate) {
-      query = query.where(function() {
-        this.where('WorkOrder.created_date', '<=', endDate + ' 23:59:59')
-            .orWhereNull('WorkOrder.created_date');
-      });
-    }
-
-    query = query.groupBy('Category.category_id', 'Category.name')
-                 .orderBy('total_orders', 'desc');
+      .leftJoin('WorkOrder', function() {
+        this.on('Category.category_id', 'WorkOrder.category_id');
+        
+        // Добавляем фильтры по датам в условие JOIN
+        if (startDate) {
+          this.andOn('WorkOrder.created_date', '>=', startDate);
+        }
+        if (endDate) {
+          this.andOn('WorkOrder.created_date', '<=', endDate + ' 23:59:59');
+        }
+      })
+      .groupBy('Category.category_id', 'Category.name')
+      .orderBy('total_orders', 'desc');
 
     const categories = await query;
 
