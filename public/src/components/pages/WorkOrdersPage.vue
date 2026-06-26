@@ -59,22 +59,20 @@ export default {
     },
     
     isForeman() {
-      return this.userRoles.includes('foreman') || this.currentUser?.position === 'Бригадир'
+      return this.userRoles.includes('foreman')
     },
     
     isInstaller() {
-      return this.userRoles.includes('installer') || this.currentUser?.position === 'Монтажник'
+      return this.userRoles.includes('installer')
     },
     
     isCustomer() {
-      return this.userRoles.includes('customer') || this.currentUser?.position === 'Заказчик'
+      return this.userRoles.includes('customer')
     },
     
-    // ✅ Получаем foremanId разными способами
     currentForemanId() {
       return this.currentUser?.foremanId || 
-             this.currentUser?.foreman_id ||
-             this.currentOrderData?.foreman_id ||
+             this.currentUser?.foreman_id || 
              null
     },
     
@@ -124,25 +122,6 @@ export default {
       }
       return pages
     },
-    
-    // ✅ Доступные бригады для бригадира
-    availableForemanCrews() {
-      const foremanId = this.currentForemanId
-      
-      console.log('🔍 availableForemanCrews - foremanId:', foremanId)
-      console.log('🔍 Все бригады:', this.crews.map(c => ({ 
-        crew_id: c.crew_id, 
-        foreman_id: c.foreman_id,
-        foreman_name: c.foreman_name 
-      })))
-      
-      if (!foremanId) return []
-      
-      const filtered = this.crews.filter(crew => crew.foreman_id === foremanId)
-      console.log('🔍 Отфильтрованные бригады:', filtered)
-      
-      return filtered
-    },
 
     userRoleDisplay() {
       if (this.isAdmin) return 'Администратор'
@@ -154,15 +133,7 @@ export default {
   },
   
   async mounted() {
-    console.log('=== WORK ORDERS PAGE MOUNTED ===')
-    console.log('User:', this.currentUser)
-    console.log('Roles:', this.userRoles)
-    console.log('isAdmin:', this.isAdmin)
-    console.log('isForeman:', this.isForeman)
-    console.log('isInstaller:', this.isInstaller)
-    console.log('isCustomer:', this.isCustomer)
-    console.log('foremanId:', this.currentForemanId)
-    
+    console.log('WorkOrdersPage mounted, user:', this.currentUser?.email, 'roles:', this.userRoles)
     await this.loadSelectData()
     await this.loadWorkOrders()
   },
@@ -177,37 +148,15 @@ export default {
   
   methods: {
     // ==========================================
-    // МЕТОДЫ ПРОВЕРКИ ПРАВ ДОСТУПА
+    // ПРОВЕРКА ПРАВ ДОСТУПА
     // ==========================================
     
     canEditOrder(order) {
       if (!order) return false
       if (this.isAdmin) return true
-      
-      if (this.isCustomer && order.customer_id === this.currentUser.customerId) {
-        return true
-      }
-      
-      if (this.isForeman) {
-        if (order.foreman_id && order.foreman_id === this.currentForemanId) return true
-        
-        const foremanFullName = `${order.foreman_last_name || ''} ${order.foreman_first_name || ''}`.trim().toLowerCase()
-        const currentUserFullName = `${this.currentUser.lastName || ''} ${this.currentUser.firstName || ''}`.trim().toLowerCase()
-        
-        if (foremanFullName && foremanFullName === currentUserFullName) return true
-        
-        if (order.performer_name) {
-          const performerName = order.performer_name.toLowerCase()
-          if (performerName === currentUserFullName || 
-              performerName.includes(currentUserFullName) ||
-              currentUserFullName.includes(performerName)) return true
-        }
-        
-        if (order.performer_id && order.performer_id === this.currentUser.id) return true
-      }
-      
-      if (this.canEdit && this.isObserverOfOrder(order)) return true
-      
+      if (this.isCustomer && order.customer_id === this.currentUser.customerId) return true
+      if (this.isForeman && order.foreman_id === this.currentForemanId) return true
+      if (this.isObserverOfOrder(order)) return true
       return false
     },
     
@@ -215,111 +164,25 @@ export default {
       if (!order) return false
       if (this.isAdmin) return true
       if (this.isObserverOfOrder(order)) return true
-      
-      if (this.isForeman) {
-        if (order.foreman_id && order.foreman_id === this.currentForemanId) return true
-        
-        const foremanName = `${order.foreman_last_name || ''} ${order.foreman_first_name || ''}`.trim().toLowerCase()
-        const userName = `${this.currentUser.lastName || ''} ${this.currentUser.firstName || ''}`.trim().toLowerCase()
-        
-        if (foremanName && foremanName === userName) return true
-        
-        if (order.performer_name) {
-          const performerName = order.performer_name.toLowerCase()
-          if (performerName === userName || performerName.includes(userName)) return true
-        }
-        
-        return false
-      }
-      
-      if (this.isCustomer) {
-        if (order.customer_id && order.customer_id === this.currentUser.id) return true
-        
-        const customerName = `${order.customer_last_name || ''} ${order.customer_first_name || ''}`.trim().toLowerCase()
-        const userName = `${this.currentUser.lastName || ''} ${this.currentUser.firstName || ''}`.trim().toLowerCase()
-        
-        if (customerName && customerName === userName) return true
-        
-        return false
-      }
-      
-      if (this.isInstaller) {
-        if (order.crew_id && this.crews.length > 0) {
-          const crew = this.crews.find(c => c.crew_id === order.crew_id)
-          if (crew && crew.installers && Array.isArray(crew.installers)) {
-            const isInCrew = crew.installers.some(installer => {
-              const userId = installer.user_id || installer.id
-              return userId === this.currentUser.id
-            })
-            if (isInCrew) return true
-          }
-        }
-        
-        if (order.performer_name) {
-          const performerName = order.performer_name.toLowerCase()
-          const userName = `${this.currentUser.lastName || ''} ${this.currentUser.firstName || ''}`.trim().toLowerCase()
-          if (performerName.includes(userName) || userName.includes(performerName)) return true
-        }
-        
-        return false
-      }
-      
+      if (this.isForeman && order.foreman_id === this.currentForemanId) return true
+      if (this.isCustomer && order.customer_id === this.currentUser.customerId) return true
       return false
     },
     
     isObserverOfOrder(order) {
-      if (!order || !order.observers || !Array.isArray(order.observers)) return false
-      const userId = this.currentUser.id
-      return order.observers.some(observer => {
-        const observerId = observer.user_id || observer.observer_id || observer.id
-        return observerId === userId
-      })
+      if (!order?.observers?.length) return false
+      return order.observers.some(o => (o.user_id || o.observer_id) === this.currentUser.id)
     },
     
     canChangeOrderStatus(order) {
       if (!order) return false
       if (this.isAdmin) return true
-      
-      if (this.isForeman) {
-        if (order.foreman_id && order.foreman_id === this.currentForemanId) return true
-        
-        const foremanFullName = `${order.foreman_last_name || ''} ${order.foreman_first_name || ''}`.trim().toLowerCase()
-        const currentUserFullName = `${this.currentUser.lastName || ''} ${this.currentUser.firstName || ''}`.trim().toLowerCase()
-        
-        if (foremanFullName && foremanFullName === currentUserFullName) return true
-        
-        if (order.performer_name) {
-          const performerName = order.performer_name.toLowerCase()
-          if (performerName === currentUserFullName || performerName.includes(currentUserFullName)) return true
-        }
-      }
-      
-      return false
-    },
-    
-    canChangeOrderCrew(order) {
-      if (!order) return false
-      if (this.isAdmin) return true
-      
-      if (this.isForeman) {
-        if (order.foreman_id && order.foreman_id === this.currentForemanId) return true
-        
-        const foremanFullName = `${order.foreman_last_name || ''} ${order.foreman_first_name || ''}`.trim().toLowerCase()
-        const currentUserFullName = `${this.currentUser.lastName || ''} ${this.currentUser.firstName || ''}`.trim().toLowerCase()
-        
-        if (foremanFullName && foremanFullName === currentUserFullName) return true
-        
-        if (order.performer_name) {
-          const performerName = order.performer_name.toLowerCase()
-          if (performerName === currentUserFullName || performerName.includes(currentUserFullName)) return true
-        }
-      }
-      
+      if (this.isForeman && order.foreman_id === this.currentForemanId) return true
       return false
     },
 
     // ==========================================
-    // МЕТОДЫ ЗАГРУЗКИ ДАННЫХ
+    // ЗАГРУЗКА ДАННЫХ
     // ==========================================
     
     async loadSelectData() {
@@ -329,118 +192,63 @@ export default {
           api.getAssets()
         ]
         
-        // ✅ Бригадиры нужны всем, кроме монтажника
         if (this.isAdmin || this.isCustomer || this.isForeman) {
           promises.push(api.getForemen())
         } else {
           promises.push(Promise.resolve({ status: 'success', data: [] }))
         }
         
-        // ✅ Пользователи нужны админу и бригадиру (для наблюдателей)
         if (this.isAdmin || this.isForeman) {
           promises.push(api.getUsers())
         } else {
           promises.push(Promise.resolve({ status: 'success', data: [] }))
         }
         
-        // ✅ Бригады нужны админу, бригадиру и монтажнику
         if (this.isAdmin || this.isForeman || this.isInstaller) {
           promises.push(api.getCrews())
         } else {
           promises.push(Promise.resolve({ status: 'success', data: [] }))
         }
         
-        const results = await Promise.allSettled(promises)
-        const [categoriesResult, assetsResult, foremenResult, usersResult, crewsResult] = results
+        const [catRes, assetRes, foremenRes, usersRes, crewsRes] = await Promise.allSettled(promises)
         
-        // Категории
-        if (categoriesResult.status === 'fulfilled' && 
-            categoriesResult.value?.status === 'success' && 
-            categoriesResult.value.data) {
-          this.categories = categoriesResult.value.data
-        } else {
-          this.categories = []
-        }
+        this.categories = catRes.value?.data || []
+        this.assets = assetRes.value?.data || []
+        this.foremen = foremenRes.value?.data || []
+        this.users = usersRes.value?.data || []
         
-        // Активы
-        if (assetsResult.status === 'fulfilled' && 
-            assetsResult.value?.status === 'success' && 
-            assetsResult.value.data) {
-          this.assets = assetsResult.value.data
-        } else {
-          this.assets = []
-        }
-        
-        // Бригадиры
-        if (foremenResult.status === 'fulfilled' && 
-            foremenResult.value?.status === 'success' && 
-            foremenResult.value.data) {
-          this.foremen = foremenResult.value.data
-          console.log('✅ Загружены бригадиры:', this.foremen.length)
-        } else {
-          this.foremen = []
-        }
-        
-        // Пользователи
-        if (usersResult.status === 'fulfilled' && 
-            usersResult.value?.status === 'success' && 
-            usersResult.value.data) {
-          this.users = usersResult.value.data
-          console.log('✅ Загружены пользователи:', this.users.length)
-        } else {
-          this.users = []
-        }
-        
-        // Бригады
-        if (crewsResult.status === 'fulfilled' && 
-            crewsResult.value?.status === 'success' && 
-            crewsResult.value.data) {
-          const crews = crewsResult.value.data
-          console.log('✅ Загружены бригады (базовые):', crews.length)
-          
-          // Загружаем детальную информацию
-          const detailedCrews = await Promise.allSettled(
-            crews.map(async (crew) => {
-              try {
-                const detailRes = await api.getCrew(crew.crew_id)
-                if (detailRes?.status === 'success' && detailRes.data) {
-                  return { ...crew, ...detailRes.data }
-                }
-              } catch (e) {
-                console.error('Error loading crew details:', e)
-              }
+        // Загружаем бригады с деталями
+        const crewsData = crewsRes.value?.data || []
+        const detailedCrews = await Promise.allSettled(
+          crewsData.map(async (crew) => {
+            try {
+              const detail = await api.getCrew(crew.crew_id)
+              return detail?.data || crew
+            } catch {
               return crew
-            })
-          )
-          
-          this.crews = detailedCrews
-            .filter(result => result.status === 'fulfilled')
-            .map(result => result.value)
-          
-          console.log('✅ Загружены бригады (детальные):', this.crews.length)
-          console.log('✅ Бригады для текущего бригадира:', this.availableForemanCrews.length)
-        } else {
-          this.crews = []
-        }
+            }
+          })
+        )
+        this.crews = detailedCrews
+          .filter(r => r.status === 'fulfilled')
+          .map(r => r.value)
         
+        console.log('✅ Данные загружены:', {
+          categories: this.categories.length,
+          assets: this.assets.length,
+          foremen: this.foremen.length,
+          users: this.users.length,
+          crews: this.crews.length
+        })
       } catch (error) {
         console.error('❌ Ошибка загрузки данных:', error)
-        this.categories = []
-        this.assets = []
-        this.foremen = []
-        this.users = []
-        this.crews = []
       }
     },
     
     async loadWorkOrders() {
       this.loading = true
       try {
-        const params = { 
-          page: this.pagination.page, 
-          limit: this.pagination.limit 
-        }
-        
+        const params = { page: this.pagination.page, limit: this.pagination.limit }
         if (this.filters.search) params.search = this.filters.search
         if (this.filters.status) params.status = this.filters.status
         if (this.filters.priority) params.priority = this.filters.priority
@@ -450,21 +258,17 @@ export default {
         if (response?.status === 'success' && response.data) {
           this.workOrders = response.data.workOrders || []
           this.pagination = response.data.pagination || this.pagination
-          console.log('✅ Загружены заявки:', this.workOrders.length)
-        } else {
-          throw new Error('Invalid response format')
         }
       } catch (error) {
         console.error('❌ Ошибка загрузки заявок:', error)
-        window.showToast?.('Ошибка загрузки заявок: ' + (error.message || 'Неизвестная ошибка'), 'danger')
-        this.workOrders = []
+        window.showToast?.('Ошибка загрузки заявок', 'danger')
       } finally {
         this.loading = false
       }
     },
 
     // ==========================================
-    // МЕТОДЫ РАБОТЫ С МОДАЛЬНЫМ ОКНОМ
+    // МОДАЛЬНОЕ ОКНО
     // ==========================================
     
     openCreateModal() {
@@ -482,73 +286,71 @@ export default {
       this.showModal()
     },
     
-    async openViewModal(id) {
-      try {
-        const order = this.workOrders.find(o => o.work_order_id === id)
-        
-        if (!order) {
-          const response = await api.getWorkOrder(id)
-          if (response?.status === 'success' && response.data) {
-            if (!this.canViewOrder(response.data)) {
-              window.showToast?.('У вас нет доступа к этой заявке', 'warning')
-              return
-            }
-            this.fillFormFromOrder(response.data)
-          } else {
-            throw new Error('Failed to load order')
-          }
-        } else {
-          if (!this.canViewOrder(order)) {
-            window.showToast?.('У вас нет доступа к этой заявке', 'warning')
-            return
-          }
-          this.fillFormFromOrder(order)
-        }
-        
-        this.viewOnlyMode = true
-        this.showModal()
-      } catch (error) {
-        console.error('Error opening view modal:', error)
-        window.showToast?.('Ошибка загрузки заявки: ' + (error.message || 'Неизвестная ошибка'), 'danger')
-      }
-    },
-    
     async openEditModal(id) {
       try {
-        const order = this.workOrders.find(o => o.work_order_id === id)
+        let order = this.workOrders.find(o => o.work_order_id === id)
         
         if (!order) {
           const response = await api.getWorkOrder(id)
           if (response?.status === 'success' && response.data) {
-            if (!this.canEditOrder(response.data)) {
-              window.showToast?.('У вас нет прав на редактирование этой заявки', 'warning')
-              return
-            }
-            this.fillFormFromOrder(response.data)
-          } else {
-            throw new Error('Failed to load order')
+            order = response.data
           }
-        } else {
-          if (!this.canEditOrder(order)) {
-            window.showToast?.('У вас нет прав на редактирование этой заявки', 'warning')
-            return
-          }
-          this.fillFormFromOrder(order)
         }
         
+        if (!order) {
+          window.showToast?.('Заявка не найдена', 'danger')
+          return
+        }
+        
+        if (!this.canEditOrder(order)) {
+          window.showToast?.('У вас нет прав на редактирование этой заявки', 'warning')
+          return
+        }
+        
+        this.fillFormFromOrder(order)
         this.viewOnlyMode = false
         this.showModal()
       } catch (error) {
         console.error('Error opening edit modal:', error)
-        window.showToast?.('Ошибка загрузки заявки: ' + (error.message || 'Неизвестная ошибка'), 'danger')
+        window.showToast?.('Ошибка загрузки заявки', 'danger')
+      }
+    },
+    
+    async openViewModal(id) {
+      try {
+        let order = this.workOrders.find(o => o.work_order_id === id)
+        
+        if (!order) {
+          const response = await api.getWorkOrder(id)
+          if (response?.status === 'success' && response.data) {
+            order = response.data
+          }
+        }
+        
+        if (!order) {
+          window.showToast?.('Заявка не найдена', 'danger')
+          return
+        }
+        
+        if (!this.canViewOrder(order)) {
+          window.showToast?.('У вас нет доступа к этой заявке', 'warning')
+          return
+        }
+        
+        this.fillFormFromOrder(order)
+        this.viewOnlyMode = true
+        this.showModal()
+      } catch (error) {
+        console.error('Error opening view modal:', error)
+        window.showToast?.('Ошибка загрузки заявки', 'danger')
       }
     },
     
     fillFormFromOrder(order) {
       this.editingId = order.work_order_id
-      this.currentOrderData = order
+      this.currentOrderData = { ...order }
       
-      console.log('📝 Заполнение формы заявки:', {
+      console.log('📝 Заполнение формы:', {
         id: order.work_order_id,
         foreman_id: order.foreman_id,
         crew_id: order.crew_id,
@@ -565,38 +367,33 @@ export default {
         deadline: order.deadline || '',
         description: order.description || '',
         comment: order.comment || '',
-        observerIds: order.observers && Array.isArray(order.observers) 
-          ? order.observers.map(o => o.user_id || o.observer_id || o.id).filter(Boolean)
-          : []
+        observerIds: order.observers?.map(o => o.user_id || o.observer_id).filter(Boolean) || []
       }
       
       this.errors = {}
       
-      // ✅ Ищем бригаду
+      // ✅ Находим бригаду исполнителя
+      this.findCurrentCrew(order)
+    },
+    
+    findCurrentCrew(order) {
+      // Ищем бригаду по crew_id или foreman_id
       if (order.crew_id) {
-        const crew = this.crews.find(c => c.crew_id === order.crew_id)
-        console.log('🔍 Поиск бригады по crew_id:', order.crew_id, 'Найдена:', !!crew)
-        this.currentPerformerCrew = crew || null
+        this.currentPerformerCrew = this.crews.find(c => c.crew_id === order.crew_id) || null
       } else if (order.foreman_id) {
-        const crew = this.crews.find(c => c.foreman_id === order.foreman_id)
-        console.log('🔍 Поиск бригады по foreman_id:', order.foreman_id, 'Найдена:', !!crew)
-        this.currentPerformerCrew = crew || null
+        this.currentPerformerCrew = this.crews.find(c => c.foreman_id === order.foreman_id) || null
       } else {
         this.currentPerformerCrew = null
       }
+      
+      console.log('🔍 Бригада исполнителя:', this.currentPerformerCrew?.crew_id || 'не найдена')
     },
     
     showModal() {
       if (!this.modalInstance) {
-        const modalElement = this.$refs.modalElement
-        if (!modalElement) {
-          console.error('Modal element not found')
-          return
-        }
-        this.modalInstance = new bootstrap.Modal(modalElement, {
-          backdrop: 'static',
-          keyboard: false
-        })
+        const el = this.$refs.modalElement
+        if (!el) return
+        this.modalInstance = new bootstrap.Modal(el, { backdrop: 'static', keyboard: false })
       }
       this.modalInstance.show()
     },
@@ -620,64 +417,44 @@ export default {
         comment: '',
         observerIds: []
       }
+      this.currentPerformerCrew = null
       this.errors = {}
     },
 
     // ==========================================
-    // МЕТОДЫ СОХРАНЕНИЯ И УДАЛЕНИЯ
+    // ОБРАБОТЧИКИ ИЗМЕНЕНИЙ
     // ==========================================
     
-    async changeCrew(crewId) {
-      if (!this.currentOrderData?.performer_id) {
-        window.showToast?.('Нет исполнителя для назначения бригады', 'warning')
-        return
-      }
-      
-      if (!this.canChangeOrderCrew(this.currentOrderData)) {
-        window.showToast?.('У вас нет прав на смену бригады', 'warning')
-        return
-      }
-      
-      try {
-        const response = await api.updatePerformerCrew(this.currentOrderData.performer_id, crewId)
-        if (response?.status === 'success') {
-          window.showToast?.('Бригада изменена', 'success')
-          
-          const crew = this.crews.find(c => c.crew_id === crewId)
-          this.currentPerformerCrew = crew || null
-          
-          await this.loadWorkOrders()
-        } else {
-          throw new Error(response?.message || 'Failed to update crew')
-        }
-      } catch (error) {
-        console.error('Error changing crew:', error)
-        window.showToast?.('Ошибка изменения бригады: ' + (error.message || 'Неизвестная ошибка'), 'danger')
-      }
-    },
-    
     onForemanChange() {
-      console.log('🔄 Смена бригадира на:', this.form.foremanId)
+      const foremanId = this.form.foremanId ? parseInt(this.form.foremanId) : null
       
-      if (!this.isEditing) {
+      console.log('🔄 Смена бригадира на:', foremanId)
+      
+      if (!foremanId) {
         this.currentPerformerCrew = null
         return
       }
       
-      if (this.form.foremanId) {
-        // ✅ Ищем бригаду среди ВСЕХ загруженных
-        const crew = this.crews.find(c => c.foreman_id === parseInt(this.form.foremanId))
-        this.currentPerformerCrew = crew || null
-        console.log('🔍 Найдена бригада:', crew)
+      // ✅ Ищем бригаду выбранного бригадира среди ВСЕХ бригад
+      const crew = this.crews.find(c => c.foreman_id === foremanId)
+      
+      if (crew) {
+        console.log('✅ Найдена бригада #' + crew.crew_id + ' для бригадира #' + foremanId)
+        this.currentPerformerCrew = { ...crew }
       } else {
+        console.log('ℹ️ У бригадира #' + foremanId + ' нет бригады')
         this.currentPerformerCrew = null
       }
     },
+
+    // ==========================================
+    // СОХРАНЕНИЕ
+    // ==========================================
     
     async saveWorkOrder() {
       this.errors = {}
       
-      if (!this.form.name || !this.form.name.trim()) {
+      if (!this.form.name?.trim()) {
         this.errors.name = 'Введите название заявки'
       }
       if (!this.form.categoryId) {
@@ -690,6 +467,7 @@ export default {
       if (Object.keys(this.errors).length > 0) return
       
       this.saving = true
+      
       try {
         const data = {
           name: this.form.name.trim(),
@@ -697,37 +475,45 @@ export default {
           assetId: parseInt(this.form.assetId),
           priority: this.form.priority,
           deadline: this.form.deadline || null,
-          description: this.form.description ? this.form.description.trim() : null,
-          comment: this.form.comment ? this.form.comment.trim() : null
+          description: this.form.description?.trim() || null,
+          comment: this.form.comment?.trim() || null
         }
         
         if (!this.isEditing) {
+          // Создание
           data.status = 'Новая'
           if (this.form.foremanId) {
             data.foremanId = parseInt(this.form.foremanId)
+            // При создании тоже ищем бригаду
+            if (this.currentPerformerCrew?.crew_id) {
+              data.crewId = this.currentPerformerCrew.crew_id
+            }
           }
         } else {
+          // Редактирование
           if (this.canChangeOrderStatus(this.currentOrderData)) {
             data.status = this.form.status
           }
           
           if (this.canChangePerformer) {
-            data.foremanId = this.form.foremanId ? parseInt(this.form.foremanId) : null
+            const newForemanId = this.form.foremanId ? parseInt(this.form.foremanId) : null
+            const oldForemanId = this.currentOrderData?.foreman_id
+            
+            // Отправляем foremanId только если он изменился
+            if (newForemanId !== oldForemanId) {
+              data.foremanId = newForemanId
+            }
           }
         }
         
-        // ✅ Наблюдатели
-        if (this.isAdmin || 
-            (this.isForeman && this.canEditOrder(this.currentOrderData)) ||
-            (this.isCustomer && !this.isEditing)) {
-          if (this.form.observerIds && this.form.observerIds.length > 0) {
-            data.observerIds = this.form.observerIds.filter(Boolean).map(id => parseInt(id))
-          } else {
-            data.observerIds = []
-          }
+        // Наблюдатели
+        if (this.isAdmin || this.isForeman || (this.isCustomer && !this.isEditing)) {
+          data.observerIds = (this.form.observerIds || [])
+            .filter(Boolean)
+            .map(id => parseInt(id))
         }
         
-        console.log('💾 Сохранение заявки:', data)
+        console.log('💾 Отправка данных:', data)
         
         let response
         if (this.isEditing) {
@@ -737,18 +523,16 @@ export default {
         }
         
         if (response?.status === 'success') {
-          window.showToast?.(
-            this.isEditing ? 'Заявка обновлена' : 'Заявка создана',
-            'success'
-          )
+          window.showToast?.(this.isEditing ? 'Заявка обновлена' : 'Заявка создана', 'success')
           this.hideModal()
           await this.loadWorkOrders()
         } else {
-          throw new Error(response?.message || 'Operation failed')
+          throw new Error(response?.message || 'Операция не выполнена')
         }
       } catch (error) {
-        console.error('Error saving work order:', error)
-        window.showToast?.('Ошибка сохранения: ' + (error.message || 'Неизвестная ошибка'), 'danger')
+        const message = error.response?.data?.message || error.message || 'Неизвестная ошибка'
+        console.error('❌ Ошибка сохранения:', message)
+        window.showToast?.('Ошибка сохранения: ' + message, 'danger')
       } finally {
         this.saving = false
       }
@@ -760,30 +544,26 @@ export default {
         return
       }
       
-      if (!confirm(`Вы уверены, что хотите удалить заявку #${id}? Это действие нельзя отменить.`)) {
-        return
-      }
+      if (!confirm(`Удалить заявку #${id}? Это действие нельзя отменить.`)) return
       
       try {
         const response = await api.deleteWorkOrder(id)
         if (response?.status === 'success') {
-          window.showToast?.('Заявка успешно удалена', 'success')
+          window.showToast?.('Заявка удалена', 'success')
           await this.loadWorkOrders()
-        } else {
-          throw new Error(response?.message || 'Failed to delete order')
         }
       } catch (error) {
-        console.error('Error deleting order:', error)
-        window.showToast?.('Ошибка удаления: ' + (error.message || 'Неизвестная ошибка'), 'danger')
+        const message = error.response?.data?.message || error.message || 'Ошибка удаления'
+        window.showToast?.(message, 'danger')
       }
     },
-    
+
     // ==========================================
-    // МЕТОДЫ ПАГИНАЦИИ И ФИЛЬТРАЦИИ
+    // ПАГИНАЦИЯ И ФИЛЬТРЫ
     // ==========================================
     
     changePage(page) {
-      if (typeof page === 'number' && page >= 1 && page <= this.pagination.totalPages) {
+      if (page >= 1 && page <= this.pagination.totalPages) {
         this.pagination.page = page
         this.loadWorkOrders()
       }
@@ -807,68 +587,57 @@ export default {
       this.pagination.page = 1
       this.loadWorkOrders()
     },
-    
+
     // ==========================================
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    // ВСПОМОГАТЕЛЬНЫЕ
     // ==========================================
     
     getStatusClass(status) {
-      const classes = {
+      const map = {
         'Новая': 'bg-info',
         'В работе': 'bg-warning text-dark',
         'Выполнена': 'bg-success',
         'Закрыта': 'bg-secondary',
         'Отменена': 'bg-danger'
       }
-      return classes[status] || 'bg-secondary'
+      return map[status] || 'bg-secondary'
     },
     
     getPriorityClass(priority) {
-      const classes = {
+      const map = {
         'Низкий': 'bg-info',
         'Средний': 'bg-warning text-dark',
         'Высокий': 'bg-danger',
         'Критичный': 'bg-danger'
       }
-      return classes[priority] || 'bg-secondary'
+      return map[priority] || 'bg-secondary'
     },
     
     isOverdue(order) {
-      if (!order.deadline || order.status === 'Выполнена' || order.status === 'Закрыта') {
-        return false
-      }
-      const deadline = new Date(order.deadline)
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      return deadline < today
+      if (!order.deadline || order.status === 'Выполнена' || order.status === 'Закрыта') return false
+      return new Date(order.deadline) < new Date(new Date().toDateString())
     },
     
     formatDate(date) {
       if (!date) return '—'
       try {
         if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-          const [year, month, day] = date.split('-')
-          return `${day}.${month}.${year}`
-        }
-        if (typeof date === 'string' && date.includes('T')) {
-          return new Date(date).toLocaleDateString('ru-RU')
+          const [y, m, d] = date.split('-')
+          return `${d}.${m}.${y}`
         }
         return new Date(date).toLocaleDateString('ru-RU')
-      } catch (e) {
+      } catch {
         return '—'
       }
     },
     
     getFullName(user) {
       if (!user) return 'Не указан'
-      const parts = [user.last_name, user.first_name, user.middle_name]
-      return parts.filter(Boolean).join(' ') || 'Не указан'
+      return [user.last_name, user.first_name, user.middle_name].filter(Boolean).join(' ') || 'Не указан'
     },
     
     getObserverNames(observers) {
-      if (!observers || !Array.isArray(observers) || observers.length === 0) {
-        return 'Нет наблюдателей'
-      }
+      if (!observers?.length) return 'Нет'
       return observers.map(o => this.getFullName(o)).join(', ')
     }
   }
@@ -877,6 +646,7 @@ export default {
 
 <template>
   <div class="work-orders-page">
+    <!-- Заголовок -->
     <div class="d-flex justify-content-between align-items-center mb-4">
       <h3 class="mb-0">
         <i class="bi bi-clipboard-check me-2"></i>
@@ -928,7 +698,7 @@ export default {
       </div>
     </div>
 
-    <!-- Таблица -->
+    <!-- Таблица заявок -->
     <div class="card border-0 shadow-sm">
       <div class="table-responsive">
         <table class="table table-hover mb-0 align-middle">
@@ -976,8 +746,9 @@ export default {
               <td>
                 <div>
                   <small>{{ order.performer_name || 'Не назначен' }}</small>
-                  <span v-if="order.crew_id" class="badge bg-success ms-1" :title="'Бригада #' + order.crew_id">
-                    <i class="bi bi-people"></i> {{ order.crew_id }}
+                  <!-- ✅ Отображаем бригаду если есть -->
+                  <span v-if="order.crew_id" class="badge bg-success ms-1" title="Бригада">
+                    <i class="bi bi-people"></i> #{{ order.crew_id }}
                   </span>
                 </div>
               </td>
@@ -990,22 +761,14 @@ export default {
               </td>
               <td>
                 <div class="btn-group btn-group-sm">
-                  <!-- Просмотр -->
-                  <button v-if="canViewOrder(order) && !canEditOrder(order) && !isInstaller"
-                          class="btn btn-outline-secondary" @click="openViewModal(order.work_order_id)" title="Просмотр">
-                    <i class="bi bi-eye"></i>
-                  </button>
-                  <!-- Просмотр для монтажника -->
-                  <button v-if="isInstaller && canViewOrder(order)"
-                          class="btn btn-outline-info" @click="openViewModal(order.work_order_id)" title="Просмотр">
-                    <i class="bi bi-eye"></i>
-                  </button>
-                  <!-- Редактирование -->
                   <button v-if="!isInstaller && canEditOrder(order)"
                           class="btn btn-outline-primary" @click="openEditModal(order.work_order_id)" title="Редактировать">
                     <i class="bi bi-pencil"></i>
                   </button>
-                  <!-- Удаление -->
+                  <button v-else-if="canViewOrder(order)"
+                          class="btn btn-outline-secondary" @click="openViewModal(order.work_order_id)" title="Просмотр">
+                    <i class="bi bi-eye"></i>
+                  </button>
                   <button v-if="canDelete" class="btn btn-outline-danger" 
                           @click="deleteOrder(order.work_order_id)" title="Удалить">
                     <i class="bi bi-trash"></i>
@@ -1061,29 +824,32 @@ export default {
             </div>
             
             <div class="row g-3">
+              <!-- Название -->
               <div class="col-12">
                 <label class="form-label">Название <span class="text-danger">*</span></label>
                 <input v-model="form.name" type="text" class="form-control"
                        :class="{ 'is-invalid': errors.name }" placeholder="Кратко опишите проблему"
-                       :readonly="viewOnlyMode || (!canEditOrder(currentOrderData) && isEditing)">
+                       :readonly="viewOnlyMode">
                 <div class="invalid-feedback">{{ errors.name }}</div>
               </div>
               
+              <!-- Категория -->
               <div class="col-md-6">
                 <label class="form-label">Категория <span class="text-danger">*</span></label>
                 <select v-model="form.categoryId" class="form-select" :class="{ 'is-invalid': errors.categoryId }"
-                        :disabled="viewOnlyMode || (!canEditOrder(currentOrderData) && isEditing)">
-                  <option value="">Выберите</option>
+                        :disabled="viewOnlyMode">
+                  <option value="">Выберите категорию</option>
                   <option v-for="cat in categories" :key="cat.category_id" :value="cat.category_id">{{ cat.name }}</option>
                 </select>
                 <div class="invalid-feedback">{{ errors.categoryId }}</div>
               </div>
               
+              <!-- ТС -->
               <div class="col-md-6">
-                <label class="form-label">ТС <span class="text-danger">*</span></label>
+                <label class="form-label">Транспортное средство <span class="text-danger">*</span></label>
                 <select v-model="form.assetId" class="form-select" :class="{ 'is-invalid': errors.assetId }"
-                        :disabled="viewOnlyMode || (!canEditOrder(currentOrderData) && isEditing)">
-                  <option value="">Выберите</option>
+                        :disabled="viewOnlyMode">
+                  <option value="">Выберите ТС</option>
                   <option v-for="asset in assets" :key="asset.asset_id" :value="asset.asset_id">
                     {{ asset.model }} ({{ asset.number }})
                   </option>
@@ -1091,72 +857,56 @@ export default {
                 <div class="invalid-feedback">{{ errors.assetId }}</div>
               </div>
               
-              <!-- Исполнитель -->
+              <!-- Исполнитель (бригадир) -->
               <div class="col-md-6">
                 <label class="form-label">
                   Исполнитель (бригадир)
-                  <span v-if="viewOnlyMode || (isEditing && !canChangePerformer)" class="text-muted small">(только просмотр)</span>
+                  <span v-if="!canChangePerformer && isEditing" class="text-muted small">(только для администратора)</span>
                 </label>
                 <select v-model="form.foremanId" class="form-select"
                         :disabled="viewOnlyMode || (isEditing && !canChangePerformer)"
                         @change="onForemanChange">
                   <option value="">Не назначен</option>
+                  <!-- ✅ Выводим ВСЕХ бригадиров -->
                   <option v-for="foreman in foremen" :key="foreman.foreman_id" :value="foreman.foreman_id">
                     {{ getFullName(foreman) }}
                   </option>
                 </select>
                 
-                <!-- Бригада -->
-                <template v-if="isEditing || viewOnlyMode">
-                  <div v-if="currentPerformerCrew" class="mt-2">
-                    <div class="card bg-success bg-opacity-10 border-success">
-                      <div class="card-body py-2 px-3">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                          <div>
-                            <i class="bi bi-people-fill text-success me-2"></i>
-                            <strong>Бригада #{{ currentPerformerCrew.crew_id }}</strong>
+                <!-- ✅ Отображение бригады выбранного бригадира -->
+                <div v-if="currentPerformerCrew && form.foremanId" class="mt-2">
+                  <div class="card bg-success bg-opacity-10 border-success">
+                    <div class="card-body py-2 px-3">
+                      <div class="d-flex align-items-center">
+                        <i class="bi bi-people-fill text-success me-2"></i>
+                        <div>
+                          <strong>Бригада #{{ currentPerformerCrew.crew_id }}</strong>
+                          <div class="small text-muted">
+                            Бригадир: {{ currentPerformerCrew.foreman_name || getFullName(foremen.find(f => f.foreman_id === currentPerformerCrew.foreman_id)) }}
                           </div>
-                          <div v-if="!viewOnlyMode && canChangeOrderCrew(currentOrderData)" class="dropdown">
-                            <button class="btn btn-sm btn-outline-success dropdown-toggle" data-bs-toggle="dropdown">
-                              <i class="bi bi-arrow-repeat"></i> Сменить
-                            </button>
-                            <ul class="dropdown-menu">
-                              <li v-for="crew in availableForemanCrews" :key="crew.crew_id">
-                                <a class="dropdown-item" href="#" @click.prevent="changeCrew(crew.crew_id)">
-                                  Бригада #{{ crew.crew_id }}
-                                </a>
-                              </li>
-                              <li v-if="availableForemanCrews.length === 0">
-                                <span class="dropdown-item text-muted">Нет доступных бригад</span>
-                              </li>
-                            </ul>
+                          <div v-if="currentPerformerCrew.installers?.length" class="small text-muted">
+                            Монтажники: {{ currentPerformerCrew.installers.map(i => getFullName(i)).join(', ') }}
                           </div>
-                        </div>
-                        <div class="small">
-                          <div><strong>Бригадир:</strong> {{ currentPerformerCrew.foreman_name || 'Не указан' }}</div>
-                          <div v-if="currentPerformerCrew.installers?.length">
-                            <strong>Монтажники:</strong>
-                            <span v-for="(inst, i) in currentPerformerCrew.installers" :key="inst.installer_id || i">
-                              {{ getFullName(inst) }}{{ i < currentPerformerCrew.installers.length - 1 ? ', ' : '' }}
-                            </span>
+                          <div v-if="currentPerformerCrew.installer_count" class="small text-muted">
+                            Всего монтажников: {{ currentPerformerCrew.installer_count }}
                           </div>
                         </div>
                       </div>
                     </div>
                   </div>
-                  <div v-else-if="form.foremanId" class="mt-2">
-                    <div class="alert alert-warning py-2 mb-0">
-                      <i class="bi bi-exclamation-triangle me-1"></i>
-                      <small>Бригада ещё не назначена</small>
-                    </div>
+                </div>
+                <div v-else-if="form.foremanId && !currentPerformerCrew" class="mt-2">
+                  <div class="alert alert-warning py-2 mb-0">
+                    <i class="bi bi-exclamation-triangle me-1"></i>
+                    <small>У этого бригадира нет бригады. Он будет назначен без бригады.</small>
                   </div>
-                </template>
+                </div>
               </div>
               
+              <!-- Приоритет -->
               <div class="col-md-3">
                 <label class="form-label">Приоритет</label>
-                <select v-model="form.priority" class="form-select"
-                        :disabled="viewOnlyMode || (!canEditOrder(currentOrderData) && isEditing)">
+                <select v-model="form.priority" class="form-select" :disabled="viewOnlyMode">
                   <option value="Низкий">Низкий</option>
                   <option value="Средний">Средний</option>
                   <option value="Высокий">Высокий</option>
@@ -1164,6 +914,7 @@ export default {
                 </select>
               </div>
               
+              <!-- Статус -->
               <div class="col-md-3">
                 <label class="form-label">Статус</label>
                 <select v-model="form.status" class="form-select"
@@ -1176,21 +927,20 @@ export default {
                 </select>
               </div>
               
+              <!-- Срок -->
               <div class="col-md-6">
                 <label class="form-label">Срок выполнения</label>
-                <input v-model="form.deadline" type="date" class="form-control"
-                       :readonly="viewOnlyMode || (!canEditOrder(currentOrderData) && isEditing)">
+                <input v-model="form.deadline" type="date" class="form-control" :readonly="viewOnlyMode">
               </div>
               
               <!-- Наблюдатели -->
               <div class="col-md-6" v-if="isAdmin || isForeman">
                 <label class="form-label">Наблюдатели</label>
                 <div class="border rounded p-2" style="max-height: 150px; overflow-y: auto;">
-                  <div v-if="users.length === 0" class="text-muted p-2">Нет пользователей</div>
+                  <div v-if="users.length === 0" class="text-muted p-2">Нет доступных пользователей</div>
                   <div v-for="user in users" :key="user.user_id" class="form-check">
                     <input type="checkbox" class="form-check-input" :id="'obs_' + user.user_id"
-                           :value="user.user_id" v-model="form.observerIds"
-                           :disabled="viewOnlyMode">
+                           :value="user.user_id" v-model="form.observerIds" :disabled="viewOnlyMode">
                     <label class="form-check-label" :for="'obs_' + user.user_id">
                       {{ getFullName(user) }}
                       <small class="text-muted">({{ user.position || 'Пользователь' }})</small>
@@ -1200,16 +950,16 @@ export default {
                 <small class="text-muted">Выбрано: {{ form.observerIds.length }}</small>
               </div>
               
+              <!-- Описание -->
               <div class="col-12">
                 <label class="form-label">Описание</label>
-                <textarea v-model="form.description" class="form-control" rows="3" 
-                          :readonly="viewOnlyMode || (!canEditOrder(currentOrderData) && isEditing)"></textarea>
+                <textarea v-model="form.description" class="form-control" rows="3" :readonly="viewOnlyMode"></textarea>
               </div>
               
+              <!-- Комментарий -->
               <div class="col-12">
                 <label class="form-label">Комментарий</label>
-                <textarea v-model="form.comment" class="form-control" rows="2" 
-                          :readonly="viewOnlyMode || (!canEditOrder(currentOrderData) && isEditing)"></textarea>
+                <textarea v-model="form.comment" class="form-control" rows="2" :readonly="viewOnlyMode"></textarea>
               </div>
             </div>
           </div>
@@ -1237,5 +987,4 @@ export default {
 .btn-group .btn { padding: 0.25rem 0.5rem; }
 .table-danger { --bs-table-bg: rgba(220, 53, 69, 0.05); }
 .table-info { --bs-table-bg: rgba(13, 202, 240, 0.05); }
-.dropdown-menu { min-width: 250px; }
 </style>
