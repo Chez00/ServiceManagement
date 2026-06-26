@@ -200,7 +200,8 @@ export default {
           middleName: this.form.middleName ? this.form.middleName.trim() : undefined,
           phone: this.form.phone ? this.form.phone.trim() : undefined,
           position: this.form.position || undefined,
-          departmentId: this.form.departmentId || null
+          departmentId: this.form.departmentId || null,
+          roles: [...this.form.roles] // ✅ Отправляем роли вместе с основными данными
         }
         
         if (this.form.password) {
@@ -210,12 +211,12 @@ export default {
         let response
         
         if (this.isEditing) {
-          // Сначала обновляем основные данные пользователя
+          // Обновляем основные данные + роли одним запросом
           response = await api.updateUser(this.editingUserId, userData)
           
           if (response.status === 'success') {
-            // Обновляем роли
-            await this.syncUserRoles(this.editingUserId)
+            // Синхронизируем специальные роли (foreman/installer)
+            await this.syncSpecialRoles(this.editingUserId)
             
             window.showToast('Пользователь успешно обновлён', 'success')
             this.hideModal()
@@ -228,7 +229,7 @@ export default {
             const userId = response.data?.id || response.data?.userId || response.data?.user?.id
             
             if (userId) {
-              await this.syncUserRoles(userId)
+              await this.syncSpecialRoles(userId)
             }
             
             window.showToast('Пользователь успешно создан', 'success')
@@ -252,90 +253,62 @@ export default {
       }
     },
     
-    async syncUserRoles(userId) {
+    async syncSpecialRoles(userId) {
       const user = this.users.find(u => u.user_id === userId)
       const currentRoles = user ? (user.roles || []) : []
       const newRoles = this.form.roles || []
       
-      const rolesToAdd = newRoles.filter(role => !currentRoles.includes(role) && role !== 'admin')
-      const rolesToRemove = currentRoles.filter(role => !newRoles.includes(role) && role !== 'admin')
-      
-      if (rolesToAdd.length === 0 && rolesToRemove.length === 0) return
-      
-      // Разделяем роли: foreman/installer — через отдельные API, customer — через updateUser
+      // Обрабатываем только foreman и installer
       const specialRoles = ['foreman', 'installer']
-      const simpleRoles = ['customer']
       
-      // 1. Удаляем специальные роли (foreman, installer)
-      for (const role of rolesToRemove) {
-        if (!specialRoles.includes(role)) continue
+      for (const role of specialRoles) {
+        const currentlyHas = currentRoles.includes(role)
+        const shouldHave = newRoles.includes(role)
         
-        try {
-          if (role === 'foreman') {
-            await api.removeForeman(userId)
-            window.showToast('Роль бригадира удалена', 'info')
-          } else if (role === 'installer') {
-            await api.removeInstaller(userId)
-            window.showToast('Роль монтажника удалена', 'info')
+        // Нужно добавить роль
+        if (!currentlyHas && shouldHave) {
+          try {
+            if (role === 'foreman') {
+              await api.makeForeman(userId)
+              window.showToast('Пользователь назначен бригадиром', 'success')
+            } else if (role === 'installer') {
+              await api.makeInstaller(userId)
+              window.showToast('Пользователь назначен монтажником', 'success')
+            }
+          } catch (error) {
+            const message = this.getErrorMessage(error)
+            // Убираем роль из формы, если не удалось добавить
+            const index = this.form.roles.indexOf(role)
+            if (index > -1) this.form.roles.splice(index, 1)
+            window.showToast(`Ошибка: ${message}`, 'danger')
           }
-        } catch (error) {
-          const message = this.getErrorMessage(error)
-          
-          // Возвращаем роль обратно в форму
-          if (!this.form.roles.includes(role)) {
-            this.form.roles.push(role)
-          }
-          
-          if (message.includes('активные заявки') || message.includes('активными заявками')) {
-            window.showToast(
-              `Невозможно снять роль «${this.getRoleLabel(role)}». Завершите или переназначьте все активные заявки.`,
-              'warning',
-              8000
-            )
-          } else {
-            window.showToast(`Ошибка при удалении роли «${this.getRoleLabel(role)}»: ${message}`, 'danger')
-          }
-          return // Прерываем синхронизацию
         }
-      }
-      
-      // 2. Добавляем специальные роли (foreman, installer)
-      for (const role of rolesToAdd) {
-        if (!specialRoles.includes(role)) continue
         
-        try {
-          if (role === 'foreman') {
-            await api.makeForeman(userId)
-            window.showToast('Пользователь назначен бригадиром', 'success')
-          } else if (role === 'installer') {
-            await api.makeInstaller(userId)
-            window.showToast('Пользователь назначен монтажником', 'success')
+        // Нужно удалить роль
+        if (currentlyHas && !shouldHave) {
+          try {
+            if (role === 'foreman') {
+              await api.removeForeman(userId)
+              window.showToast('Роль бригадира удалена', 'info')
+            } else if (role === 'installer') {
+              await api.removeInstaller(userId)
+              window.showToast('Роль монтажника удалена', 'info')
+            }
+          } catch (error) {
+            const message = this.getErrorMessage(error)
+            // Возвращаем роль в форму, если не удалось удалить
+            if (!this.form.roles.includes(role)) this.form.roles.push(role)
+            
+            if (message.includes('активные заявки') || message.includes('активными заявками')) {
+              window.showToast(
+                `Невозможно снять роль «${this.getRoleLabel(role)}». Завершите или переназначьте активные заявки.`,
+                'warning',
+                8000
+              )
+            } else {
+              window.showToast(`Ошибка: ${message}`, 'danger')
+            }
           }
-        } catch (error) {
-          const message = this.getErrorMessage(error)
-          
-          const index = this.form.roles.indexOf(role)
-          if (index > -1) {
-            this.form.roles.splice(index, 1)
-          }
-          
-          window.showToast(`Ошибка при добавлении роли «${this.getRoleLabel(role)}»: ${message}`, 'danger')
-          return
-        }
-      }
-      
-      // 3. Обрабатываем простые роли (customer) через updateUser
-      const simpleRolesChanged = simpleRoles.some(role => 
-        rolesToAdd.includes(role) || rolesToRemove.includes(role)
-      )
-      
-      if (simpleRolesChanged) {
-        try {
-          await api.updateUser(userId, { roles: [...newRoles] })
-          window.showToast('Роли пользователя обновлены', 'success')
-        } catch (error) {
-          const message = this.getErrorMessage(error)
-          window.showToast(`Ошибка обновления ролей: ${message}`, 'danger')
         }
       }
     },
@@ -413,10 +386,7 @@ export default {
               8000
             )
           } else if (message.includes('самого себя')) {
-            window.showToast(
-              'Вы не можете удалить свою учётную запись.',
-              'warning'
-            )
+            window.showToast('Вы не можете удалить свою учётную запись.', 'warning')
           } else {
             window.showToast(`Ошибка удаления: ${message}`, 'danger')
           }
