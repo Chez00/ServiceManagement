@@ -17,6 +17,7 @@ export default {
       departments: [],
       loading: false,
       saving: false,
+      formErrors: {},
       form: {
         email: '',
         password: '',
@@ -82,7 +83,8 @@ export default {
           this.users = response.data || []
         }
       } catch (error) {
-        window.showToast('Ошибка загрузки пользователей: ' + error.message, 'danger')
+        const message = error.response?.data?.message || error.message || 'Ошибка загрузки пользователей'
+        window.showToast(message, 'danger')
       } finally {
         this.loading = false
       }
@@ -112,50 +114,95 @@ export default {
       
       this.form = {
         email: user.email || '',
-        password: '', // Пароль не заполняем при редактировании
+        password: '',
         firstName: user.first_name || '',
         lastName: user.last_name || '',
         middleName: user.middle_name || '',
         phone: user.phone || '',
         position: user.position || '',
         departmentId: user.department_id || '',
-        roles: user.roles || []
+        roles: [...(user.roles || [])]
       }
       
+      this.clearFormErrors()
       this.showModal()
     },
     
-    async saveUser() {
-      // Валидация
-      if (!this.form.email) {
-        window.showToast('Введите email', 'warning')
-        return
+    clearFormErrors() {
+      this.formErrors = {
+        email: '',
+        password: '',
+        firstName: '',
+        lastName: '',
+        general: ''
+      }
+    },
+    
+    validateForm() {
+      this.clearFormErrors()
+      let isValid = true
+      
+      if (!this.form.email || !this.form.email.trim()) {
+        this.formErrors.email = 'Введите email'
+        isValid = false
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.form.email)) {
+        this.formErrors.email = 'Введите корректный email'
+        isValid = false
       }
       
       if (!this.isEditing && !this.form.password) {
-        window.showToast('Введите пароль', 'warning')
-        return
+        this.formErrors.password = 'Введите пароль'
+        isValid = false
+      } else if (this.form.password && this.form.password.length < 6) {
+        this.formErrors.password = 'Пароль должен содержать минимум 6 символов'
+        isValid = false
       }
       
-      if (!this.form.lastName || !this.form.firstName) {
-        window.showToast('Введите фамилию и имя', 'warning')
+      if (!this.form.lastName || !this.form.lastName.trim()) {
+        this.formErrors.lastName = 'Введите фамилию'
+        isValid = false
+      }
+      
+      if (!this.form.firstName || !this.form.firstName.trim()) {
+        this.formErrors.firstName = 'Введите имя'
+        isValid = false
+      }
+      
+      return isValid
+    },
+    
+    getErrorMessage(error) {
+      if (error.response?.data?.message) {
+        return error.response.data.message
+      }
+      if (error.response?.data?.errors) {
+        const errors = error.response.data.errors
+        if (Array.isArray(errors)) {
+          return errors.map(e => e.message || e.msg).join('. ')
+        }
+      }
+      return error.message || 'Произошла неизвестная ошибка'
+    },
+    
+    async saveUser() {
+      if (!this.validateForm()) {
         return
       }
       
       this.saving = true
+      this.clearFormErrors()
       
       try {
         const userData = {
-          email: this.form.email,
-          firstName: this.form.firstName,
-          lastName: this.form.lastName,
-          middleName: this.form.middleName,
-          phone: this.form.phone,
-          position: this.form.position,
+          email: this.form.email.trim(),
+          firstName: this.form.firstName.trim(),
+          lastName: this.form.lastName.trim(),
+          middleName: this.form.middleName ? this.form.middleName.trim() : undefined,
+          phone: this.form.phone ? this.form.phone.trim() : undefined,
+          position: this.form.position || undefined,
           departmentId: this.form.departmentId || null
         }
         
-        // Добавляем пароль только при создании или если он был изменен
         if (this.form.password) {
           userData.password = this.form.password
         }
@@ -163,115 +210,210 @@ export default {
         let response
         
         if (this.isEditing) {
-          // Обновляем пользователя
           response = await api.updateUser(this.editingUserId, userData)
-        } else {
-          // Создаем пользователя
-          response = await api.register(userData)
-        }
-        
-        if (response.status === 'success') {
-          const userId = this.isEditing ? this.editingUserId : response.data.userId
           
-          // Управление ролями
-          if (userId) {
-            await this.updateUserRoles(userId)
+          if (response.status === 'success') {
+            // Обновляем роли после успешного обновления пользователя
+            if (this.editingUserId) {
+              await this.syncUserRoles(this.editingUserId)
+            }
+            
+            window.showToast('Пользователь успешно обновлён', 'success')
+            this.hideModal()
+            await this.loadUsers()
           }
+        } else {
+          response = await api.register(userData)
           
-          window.showToast(
-            this.isEditing ? 'Пользователь обновлен' : 'Пользователь создан', 
-            'success'
-          )
-          this.hideModal()
-          await this.loadUsers()
+          if (response.status === 'success') {
+            const userId = response.data?.id || response.data?.userId || response.data?.user?.id
+            
+            if (userId) {
+              // Устанавливаем роли для нового пользователя
+              await this.syncUserRoles(userId)
+            }
+            
+            window.showToast('Пользователь успешно создан', 'success')
+            this.hideModal()
+            await this.loadUsers()
+          }
         }
       } catch (error) {
-        window.showToast('Ошибка сохранения: ' + error.message, 'danger')
+        const message = this.getErrorMessage(error)
+        this.formErrors.general = message
+        window.showToast(message, 'danger')
+        
+        // Подсвечиваем конкретные ошибки
+        if (message.toLowerCase().includes('email')) {
+          this.formErrors.email = message
+        }
+        if (message.toLowerCase().includes('парол')) {
+          this.formErrors.password = message
+        }
       } finally {
         this.saving = false
       }
     },
     
-    async updateUserRoles(userId) {
-      try {
-        // Получаем текущие роли пользователя
-        const user = this.users.find(u => u.user_id === userId)
-        const currentRoles = user ? (user.roles || []) : []
-        const newRoles = this.form.roles || []
-        
-        // Определяем, какие роли добавить и удалить
-        const rolesToAdd = newRoles.filter(role => !currentRoles.includes(role))
-        const rolesToRemove = currentRoles.filter(role => !newRoles.includes(role))
-        
-        // Добавляем новые роли
-        for (const role of rolesToAdd) {
-          try {
-            if (role === 'foreman') {
-              await api.makeForeman(userId)
-            } else if (role === 'installer') {
-              await api.makeInstaller(userId)
+    async syncUserRoles(userId) {
+      const user = this.users.find(u => u.user_id === userId)
+      const currentRoles = user ? (user.roles || []) : []
+      const newRoles = this.form.roles || []
+      
+      const rolesToAdd = newRoles.filter(role => !currentRoles.includes(role) && role !== 'admin')
+      const rolesToRemove = currentRoles.filter(role => !newRoles.includes(role) && role !== 'admin')
+      
+      let hasErrors = false
+      
+      // Удаляем роли
+      for (const role of rolesToRemove) {
+        try {
+          if (role === 'foreman') {
+            const response = await api.removeForeman(userId)
+            if (response?.message) {
+              window.showToast(response.message, 'info')
             }
-          } catch (error) {
-            console.error(`Error adding role ${role}:`, error)
+          } else if (role === 'installer') {
+            const response = await api.removeInstaller(userId)
+            if (response?.message) {
+              window.showToast(response.message, 'info')
+            }
+          }
+        } catch (error) {
+          hasErrors = true
+          const message = this.getErrorMessage(error)
+          
+          // Если роль не удалось удалить, возвращаем её в форму
+          if (!this.form.roles.includes(role)) {
+            this.form.roles.push(role)
+          }
+          
+          // Показываем ошибку с понятным объяснением
+          if (message.includes('активные заявки') || message.includes('активными заявками')) {
+            window.showToast(
+              `Невозможно снять роль «${this.getRoleLabel(role)}». Завершите или переназначьте все активные заявки.`,
+              'warning',
+              8000
+            )
+          } else {
+            window.showToast(`Ошибка при удалении роли «${this.getRoleLabel(role)}»: ${message}`, 'danger')
           }
         }
-        
-        // Удаляем старые роли
-        for (const role of rolesToRemove) {
-          try {
-            if (role === 'foreman') {
-              await api.removeForeman(userId)
-            } else if (role === 'installer') {
-              await api.removeInstaller(userId)
+      }
+      
+      // Добавляем роли
+      for (const role of rolesToAdd) {
+        try {
+          if (role === 'foreman') {
+            const response = await api.makeForeman(userId)
+            if (response?.message) {
+              window.showToast(response.message, 'success')
             }
-          } catch (error) {
-            console.error(`Error removing role ${role}:`, error)
+          } else if (role === 'installer') {
+            const response = await api.makeInstaller(userId)
+            if (response?.message) {
+              window.showToast(response.message, 'success')
+            }
           }
+        } catch (error) {
+          hasErrors = true
+          const message = this.getErrorMessage(error)
+          
+          // Убираем роль из формы, если не удалось добавить
+          const index = this.form.roles.indexOf(role)
+          if (index > -1) {
+            this.form.roles.splice(index, 1)
+          }
+          
+          window.showToast(`Ошибка при добавлении роли «${this.getRoleLabel(role)}»: ${message}`, 'danger')
         }
-      } catch (error) {
-        console.error('Error updating roles:', error)
-        throw error
+      }
+      
+      if (!hasErrors && (rolesToAdd.length > 0 || rolesToRemove.length > 0)) {
+        window.showToast('Роли пользователя обновлены', 'success')
       }
     },
     
     async toggleForeman(user) {
+      const isCurrentlyForeman = user.roles?.includes('foreman')
+      
       try {
-        if (user.roles && user.roles.includes('foreman')) {
-          await api.removeForeman(user.user_id)
-          window.showToast('Роль бригадира удалена', 'success')
+        if (isCurrentlyForeman) {
+          const response = await api.removeForeman(user.user_id)
+          window.showToast(response.message || 'Роль бригадира удалена', 'success')
         } else {
-          await api.makeForeman(user.user_id)
-          window.showToast('Пользователь назначен бригадиром', 'success')
+          const response = await api.makeForeman(user.user_id)
+          window.showToast(response.message || 'Пользователь назначен бригадиром', 'success')
         }
         await this.loadUsers()
       } catch (error) {
-        window.showToast('Ошибка: ' + error.message, 'danger')
+        const message = this.getErrorMessage(error)
+        
+        if (message.includes('активные заявки') || message.includes('активными заявками')) {
+          window.showToast(
+            'Невозможно снять роль бригадира. У бригадира есть активные заявки. Завершите или переназначьте их.',
+            'danger',
+            8000
+          )
+        } else {
+          window.showToast(message, 'danger')
+        }
       }
     },
     
     async toggleInstaller(user) {
+      const isCurrentlyInstaller = user.roles?.includes('installer')
+      
       try {
-        if (user.roles && user.roles.includes('installer')) {
-          await api.removeInstaller(user.user_id)
-          window.showToast('Роль монтажника удалена', 'success')
+        if (isCurrentlyInstaller) {
+          const response = await api.removeInstaller(user.user_id)
+          window.showToast(response.message || 'Роль монтажника удалена', 'success')
         } else {
-          await api.makeInstaller(user.user_id)
-          window.showToast('Пользователь назначен монтажником', 'success')
+          const response = await api.makeInstaller(user.user_id)
+          window.showToast(response.message || 'Пользователь назначен монтажником', 'success')
         }
         await this.loadUsers()
       } catch (error) {
-        window.showToast('Ошибка: ' + error.message, 'danger')
+        const message = this.getErrorMessage(error)
+        
+        if (message.includes('активные заявки') || message.includes('активными заявками')) {
+          window.showToast(
+            'Невозможно снять роль монтажника. Монтажник состоит в бригаде с активными заявками.',
+            'danger',
+            8000
+          )
+        } else {
+          window.showToast(message, 'danger')
+        }
       }
     },
     
-    async deleteUser(id) {
-      if (confirm('Вы уверены, что хотите удалить этого пользователя? Это действие нельзя отменить.')) {
+    async deleteUser(user) {
+      const userName = this.getFullName(user)
+      const confirmMessage = `Вы уверены, что хотите удалить пользователя «${userName}»?\n\nЭто действие нельзя отменить.`
+      
+      if (confirm(confirmMessage)) {
         try {
-          await api.deleteUser(id)
-          window.showToast('Пользователь удален', 'success')
+          const response = await api.deleteUser(user.user_id)
+          window.showToast(response.message || 'Пользователь удалён', 'success')
           await this.loadUsers()
         } catch (error) {
-          window.showToast('Ошибка удаления: ' + error.message, 'danger')
+          const message = this.getErrorMessage(error)
+          
+          if (message.includes('активные заявки') || message.includes('активными заявками')) {
+            window.showToast(
+              'Невозможно удалить пользователя. У него есть активные заявки. Завершите или переназначьте их.',
+              'danger',
+              8000
+            )
+          } else if (message.includes('самого себя')) {
+            window.showToast(
+              'Вы не можете удалить свою учётную запись.',
+              'warning'
+            )
+          } else {
+            window.showToast(`Ошибка удаления: ${message}`, 'danger')
+          }
         }
       }
     },
@@ -301,6 +443,7 @@ export default {
         departmentId: '',
         roles: []
       }
+      this.clearFormErrors()
     },
     
     getRoleLabel(role) {
@@ -408,7 +551,7 @@ export default {
                   </button>
                   <button 
                     class="btn btn-outline-danger"
-                    @click="deleteUser(user.user_id)"
+                    @click="deleteUser(user)"
                     title="Удалить">
                     <i class="bi bi-trash"></i>
                   </button>
@@ -420,7 +563,7 @@ export default {
       </div>
     </div>
 
-    <!-- Модальное окно создания/редактирования пользователя -->
+    <!-- Модальное окно создания/редактирования -->
     <div class="modal fade" ref="modalElement" tabindex="-1">
       <div class="modal-dialog modal-lg">
         <div class="modal-content">
@@ -432,6 +575,14 @@ export default {
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
           </div>
           <div class="modal-body">
+            
+            <!-- Общая ошибка -->
+            <div v-if="formErrors.general" class="alert alert-danger alert-dismissible fade show" role="alert">
+              <i class="bi bi-exclamation-triangle-fill me-2"></i>
+              <strong>Ошибка:</strong> {{ formErrors.general }}
+              <button type="button" class="btn-close" @click="formErrors.general = ''"></button>
+            </div>
+
             <div class="row">
               <!-- Основная информация -->
               <div class="col-md-6">
@@ -446,9 +597,12 @@ export default {
                   </label>
                   <input 
                     type="email" 
-                    class="form-control" 
+                    class="form-control"
+                    :class="{ 'is-invalid': formErrors.email }"
                     v-model="form.email"
+                    @input="formErrors.email = ''"
                     placeholder="user@example.com">
+                  <div v-if="formErrors.email" class="invalid-feedback">{{ formErrors.email }}</div>
                 </div>
                 
                 <div class="mb-3">
@@ -459,9 +613,12 @@ export default {
                   </label>
                   <input 
                     type="password" 
-                    class="form-control" 
+                    class="form-control"
+                    :class="{ 'is-invalid': formErrors.password }"
                     v-model="form.password"
+                    @input="formErrors.password = ''"
                     placeholder="Введите пароль">
+                  <div v-if="formErrors.password" class="invalid-feedback">{{ formErrors.password }}</div>
                 </div>
                 
                 <div class="mb-3">
@@ -470,9 +627,12 @@ export default {
                   </label>
                   <input 
                     type="text" 
-                    class="form-control" 
+                    class="form-control"
+                    :class="{ 'is-invalid': formErrors.lastName }"
                     v-model="form.lastName"
+                    @input="formErrors.lastName = ''"
                     placeholder="Иванов">
+                  <div v-if="formErrors.lastName" class="invalid-feedback">{{ formErrors.lastName }}</div>
                 </div>
                 
                 <div class="mb-3">
@@ -481,9 +641,12 @@ export default {
                   </label>
                   <input 
                     type="text" 
-                    class="form-control" 
+                    class="form-control"
+                    :class="{ 'is-invalid': formErrors.firstName }"
                     v-model="form.firstName"
+                    @input="formErrors.firstName = ''"
                     placeholder="Иван">
+                  <div v-if="formErrors.firstName" class="invalid-feedback">{{ formErrors.firstName }}</div>
                 </div>
                 
                 <div class="mb-3">
@@ -625,5 +788,13 @@ export default {
 
 .modal-footer {
   border-top: none;
+}
+
+.alert {
+  margin-bottom: 1rem;
+}
+
+.invalid-feedback {
+  display: block;
 }
 </style>
