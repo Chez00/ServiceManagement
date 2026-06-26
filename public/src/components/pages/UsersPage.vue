@@ -210,13 +210,12 @@ export default {
         let response
         
         if (this.isEditing) {
+          // Сначала обновляем основные данные пользователя
           response = await api.updateUser(this.editingUserId, userData)
           
           if (response.status === 'success') {
-            // Обновляем роли после успешного обновления пользователя
-            if (this.editingUserId) {
-              await this.syncUserRoles(this.editingUserId)
-            }
+            // Обновляем роли
+            await this.syncUserRoles(this.editingUserId)
             
             window.showToast('Пользователь успешно обновлён', 'success')
             this.hideModal()
@@ -229,7 +228,6 @@ export default {
             const userId = response.data?.id || response.data?.userId || response.data?.user?.id
             
             if (userId) {
-              // Устанавливаем роли для нового пользователя
               await this.syncUserRoles(userId)
             }
             
@@ -243,7 +241,6 @@ export default {
         this.formErrors.general = message
         window.showToast(message, 'danger')
         
-        // Подсвечиваем конкретные ошибки
         if (message.toLowerCase().includes('email')) {
           this.formErrors.email = message
         }
@@ -263,32 +260,32 @@ export default {
       const rolesToAdd = newRoles.filter(role => !currentRoles.includes(role) && role !== 'admin')
       const rolesToRemove = currentRoles.filter(role => !newRoles.includes(role) && role !== 'admin')
       
-      let hasErrors = false
+      if (rolesToAdd.length === 0 && rolesToRemove.length === 0) return
       
-      // Удаляем роли
+      // Разделяем роли: foreman/installer — через отдельные API, customer — через updateUser
+      const specialRoles = ['foreman', 'installer']
+      const simpleRoles = ['customer']
+      
+      // 1. Удаляем специальные роли (foreman, installer)
       for (const role of rolesToRemove) {
+        if (!specialRoles.includes(role)) continue
+        
         try {
           if (role === 'foreman') {
-            const response = await api.removeForeman(userId)
-            if (response?.message) {
-              window.showToast(response.message, 'info')
-            }
+            await api.removeForeman(userId)
+            window.showToast('Роль бригадира удалена', 'info')
           } else if (role === 'installer') {
-            const response = await api.removeInstaller(userId)
-            if (response?.message) {
-              window.showToast(response.message, 'info')
-            }
+            await api.removeInstaller(userId)
+            window.showToast('Роль монтажника удалена', 'info')
           }
         } catch (error) {
-          hasErrors = true
           const message = this.getErrorMessage(error)
           
-          // Если роль не удалось удалить, возвращаем её в форму
+          // Возвращаем роль обратно в форму
           if (!this.form.roles.includes(role)) {
             this.form.roles.push(role)
           }
           
-          // Показываем ошибку с понятным объяснением
           if (message.includes('активные заявки') || message.includes('активными заявками')) {
             window.showToast(
               `Невозможно снять роль «${this.getRoleLabel(role)}». Завершите или переназначьте все активные заявки.`,
@@ -298,39 +295,48 @@ export default {
           } else {
             window.showToast(`Ошибка при удалении роли «${this.getRoleLabel(role)}»: ${message}`, 'danger')
           }
+          return // Прерываем синхронизацию
         }
       }
       
-      // Добавляем роли
+      // 2. Добавляем специальные роли (foreman, installer)
       for (const role of rolesToAdd) {
+        if (!specialRoles.includes(role)) continue
+        
         try {
           if (role === 'foreman') {
-            const response = await api.makeForeman(userId)
-            if (response?.message) {
-              window.showToast(response.message, 'success')
-            }
+            await api.makeForeman(userId)
+            window.showToast('Пользователь назначен бригадиром', 'success')
           } else if (role === 'installer') {
-            const response = await api.makeInstaller(userId)
-            if (response?.message) {
-              window.showToast(response.message, 'success')
-            }
+            await api.makeInstaller(userId)
+            window.showToast('Пользователь назначен монтажником', 'success')
           }
         } catch (error) {
-          hasErrors = true
           const message = this.getErrorMessage(error)
           
-          // Убираем роль из формы, если не удалось добавить
           const index = this.form.roles.indexOf(role)
           if (index > -1) {
             this.form.roles.splice(index, 1)
           }
           
           window.showToast(`Ошибка при добавлении роли «${this.getRoleLabel(role)}»: ${message}`, 'danger')
+          return
         }
       }
       
-      if (!hasErrors && (rolesToAdd.length > 0 || rolesToRemove.length > 0)) {
-        window.showToast('Роли пользователя обновлены', 'success')
+      // 3. Обрабатываем простые роли (customer) через updateUser
+      const simpleRolesChanged = simpleRoles.some(role => 
+        rolesToAdd.includes(role) || rolesToRemove.includes(role)
+      )
+      
+      if (simpleRolesChanged) {
+        try {
+          await api.updateUser(userId, { roles: [...newRoles] })
+          window.showToast('Роли пользователя обновлены', 'success')
+        } catch (error) {
+          const message = this.getErrorMessage(error)
+          window.showToast(`Ошибка обновления ролей: ${message}`, 'danger')
+        }
       }
     },
     
@@ -563,7 +569,7 @@ export default {
       </div>
     </div>
 
-    <!-- Модальное окно создания/редактирования -->
+    <!-- Модальное окно -->
     <div class="modal fade" ref="modalElement" tabindex="-1">
       <div class="modal-dialog modal-lg">
         <div class="modal-content">

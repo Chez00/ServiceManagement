@@ -90,9 +90,12 @@ export default {
       </form>
       
       <div class="text-center mt-4">
-        <!-- <small class="text-muted">
-          Демо: <code>admin@example.com</code> / <code>password123</code>
-        </small> -->
+        <small class="text-muted">
+          Администратор: <code>admin@example.com</code> / <code>12345678</code>
+          Бригадир: <code>foreman@example.com</code> / <code>12345678</code>
+          Монтажник: <code>installer@example.com</code> / <code>12345678</code>
+          Заказчик: <code>user21@mail.ru</code> / <code>12345678</code>
+        </small>
       </div>
     </div>
   </div>
