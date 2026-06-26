@@ -1,68 +1,5 @@
 const db = require('../config/database');
 
-const saveWorkOrder = async(req, res) => {
-  this.errors = {}
-  
-  if (!this.form.name || !this.form.name.trim()) {
-    this.errors.name = 'Введите название заявки'
-  }
-  if (!this.form.categoryId) {
-    this.errors.categoryId = 'Выберите категорию'
-  }
-  if (!this.form.assetId) {
-    this.errors.assetId = 'Выберите оборудование'
-  }
-  
-  if (Object.keys(this.errors).length > 0) return
-  
-  this.saving = true
-  try {
-    const data = {
-      name: this.form.name ? this.form.name.trim() : '',
-      categoryId: this.form.categoryId ? parseInt(this.form.categoryId) : null,
-      assetId: this.form.assetId ? parseInt(this.form.assetId) : null,
-      foremanId: this.form.foremanId ? parseInt(this.form.foremanId) : null,
-      priority: this.form.priority || 'Средний',
-      status: this.form.status || 'Новая',
-      deadline: this.form.deadline || null,
-      description: this.form.description ? this.form.description.trim() : null,
-      comment: this.form.comment ? this.form.comment.trim() : null
-    }
-    
-    let response
-    if (this.isEditing) {
-      // При редактировании отправляем только измененные поля
-      const updateData = {}
-      if (data.name !== undefined) updateData.name = data.name
-      if (data.categoryId !== undefined) updateData.categoryId = data.categoryId
-      if (data.assetId !== undefined) updateData.assetId = data.assetId
-      if (data.foremanId !== undefined) updateData.foremanId = data.foremanId
-      if (data.priority !== undefined) updateData.priority = data.priority
-      if (data.status !== undefined) updateData.status = data.status
-      if (data.deadline !== undefined) updateData.deadline = data.deadline
-      if (data.description !== undefined) updateData.description = data.description
-      if (data.comment !== undefined) updateData.comment = data.comment
-      
-      response = await api.updateWorkOrder(this.editingId, updateData)
-    } else {
-      response = await api.createWorkOrder(data)
-    }
-    
-    if (response.status === 'success') {
-      window.showToast(
-        this.isEditing ? 'Заявка обновлена' : 'Заявка создана',
-        'success'
-      )
-      this.hideModal()
-      await this.loadWorkOrders()
-    }
-  } catch (error) {
-    window.showToast('Ошибка сохранения: ' + error.message, 'danger')
-  } finally {
-    this.saving = false
-  }
-};
-
 const getAllWorkOrders = async (req, res) => {
   try {
     const {
@@ -74,15 +11,12 @@ const getAllWorkOrders = async (req, res) => {
       search
     } = req.query;
 
-    console.log('📊 Запрос списка заявок:', { page, limit, status, priority, categoryId, search });
-
-    const offset = (page - 1) * limit;
-    
-    // Получаем ID пользователя и его должность
+    const offset = (parseInt(page) - 1) * parseInt(limit);
     const userId = req.user.id;
     const userPosition = req.user.position;
+    const userRoles = req.userRoles || [];
 
-    console.log('👤 Пользователь:', { userId, userPosition });
+    const isAdmin = userPosition === 'Администратор' || userRoles.includes('admin');
 
     let baseQuery = db('WorkOrder')
       .select(
@@ -119,44 +53,30 @@ const getAllWorkOrders = async (req, res) => {
       .leftJoin('User as Foreman_User', 'Foreman.user_id', 'Foreman_User.user_id')
       .leftJoin('Crew', 'Performer.crew_id', 'Crew.crew_id');
 
-    // ==========================================
-    // ФИЛЬТРАЦИЯ ПО РОЛЯМ ПОЛЬЗОВАТЕЛЯ
-    // ==========================================
-    
-    const isAdmin = userPosition === 'Администратор';
-    
+    // Фильтрация по ролям пользователя
     if (!isAdmin) {
-      let customerId = null;
-      let foremanId = null;
-      let installerId = null;
-      
-      const customer = await db('Customer').where('user_id', userId).first();
-      if (customer) customerId = customer.customer_id;
-      
-      const foreman = await db('Foreman').where('user_id', userId).first();
-      if (foreman) foremanId = foreman.foreman_id;
-      
-      const installer = await db('Installer').where('user_id', userId).first();
-      if (installer) installerId = installer.installer_id;
-      
-      baseQuery = baseQuery.where(function() {
-        if (customerId) {
-          this.orWhere('WorkOrder.customer_id', customerId);
+      const [customer, foreman, installer] = await Promise.all([
+        db('Customer').where('user_id', userId).first(),
+        db('Foreman').where('user_id', userId).first(),
+        db('Installer').where('user_id', userId).first()
+      ]);
+
+      baseQuery = baseQuery.where(function () {
+        if (customer) {
+          this.orWhere('WorkOrder.customer_id', customer.customer_id);
         }
-        
-        if (foremanId) {
-          this.orWhere('Performer.foreman_id', foremanId);
+        if (foreman) {
+          this.orWhere('Performer.foreman_id', foreman.foreman_id);
         }
-        
-        if (installerId) {
-          this.orWhereIn('Performer.crew_id', function() {
+        if (installer) {
+          this.orWhereIn('Performer.crew_id', function () {
             this.select('crew_id')
               .from('Crew_Installer')
-              .where('installer_id', installerId);
+              .where('installer_id', installer.installer_id);
           });
         }
-        
-        this.orWhereIn('WorkOrder.work_order_id', function() {
+        // Наблюдатель видит заявки, где он назначен
+        this.orWhereIn('WorkOrder.work_order_id', function () {
           this.select('work_order_id')
             .from('Observer')
             .where('user_id', userId);
@@ -164,7 +84,7 @@ const getAllWorkOrders = async (req, res) => {
       });
     }
 
-    // Применяем дополнительные фильтры
+    // Применяем фильтры
     if (status) {
       baseQuery = baseQuery.where('WorkOrder.status', status);
     }
@@ -172,54 +92,40 @@ const getAllWorkOrders = async (req, res) => {
       baseQuery = baseQuery.where('WorkOrder.priority', priority);
     }
     if (categoryId) {
-      baseQuery = baseQuery.where('WorkOrder.category_id', categoryId);
+      baseQuery = baseQuery.where('WorkOrder.category_id', parseInt(categoryId));
     }
     if (search) {
-      baseQuery = baseQuery.where(function() {
-        this.where('WorkOrder.name', 'like', `%${search}%`)
-          .orWhere('WorkOrder.description', 'like', `%${search}%`)
-          .orWhere('Asset.number', 'like', `%${search}%`)
-          .orWhere('Asset.model', 'like', `%${search}%`)
-          .orWhere('Customer_User.last_name', 'like', `%${search}%`)
-          .orWhere('Customer_User.first_name', 'like', `%${search}%`)
-          .orWhere('Foreman_User.last_name', 'like', `%${search}%`)
-          .orWhere('Foreman_User.first_name', 'like', `%${search}%`);
+      baseQuery = baseQuery.where(function () {
+        this.where('WorkOrder.name', 'ilike', `%${search}%`)
+          .orWhere('WorkOrder.description', 'ilike', `%${search}%`)
+          .orWhere('Asset.number', 'ilike', `%${search}%`)
+          .orWhere('Asset.model', 'ilike', `%${search}%`)
+          .orWhere('Customer_User.last_name', 'ilike', `%${search}%`)
+          .orWhere('Foreman_User.last_name', 'ilike', `%${search}%`);
       });
     }
 
-    // ==========================================
-    // ИСПРАВЛЕННЫЙ ПОДСЧЕТ ОБЩЕГО КОЛИЧЕСТВА
-    // ==========================================
-    
-    // Клонируем запрос и считаем количество уникальных заявок
-    const countQuery = baseQuery.clone()
-      .clearSelect()
-      .clearOrder()
+    // Подсчёт общего количества (используем подзапрос для корректного COUNT с JOIN)
+    const countQuery = db('WorkOrder')
       .count('* as total')
-      .first();
-    
-    const countResult = await countQuery;
+      .whereIn('WorkOrder.work_order_id', baseQuery.clone().clearSelect().select('WorkOrder.work_order_id'));
+
+    // Получаем total и данные параллельно
+    const [countResult, workOrders] = await Promise.all([
+      countQuery.first(),
+      baseQuery
+        .orderBy('WorkOrder.created_date', 'desc')
+        .limit(parseInt(limit))
+        .offset(offset)
+    ]);
+
     const total = countResult ? parseInt(countResult.total) : 0;
-    
-    console.log('📈 Всего найдено заявок:', total);
 
-    // Получаем заявки с пагинацией
-    const workOrders = await baseQuery
-      .orderBy('WorkOrder.created_date', 'desc')
-      .limit(parseInt(limit))
-      .offset(offset);
-
-    console.log(`📋 Загружено ${workOrders.length} заявок для страницы ${page}`);
-
-    // ==========================================
-    // ЗАГРУЗКА НАБЛЮДАТЕЛЕЙ ДЛЯ ВСЕХ ЗАЯВОК
-    // ==========================================
+    // Загрузка наблюдателей для всех заявок
     const orderIds = workOrders.map(o => o.work_order_id);
     let observersMap = {};
-    
+
     if (orderIds.length > 0) {
-      console.log('👥 Загрузка наблюдателей для заявок:', orderIds);
-      
       const observers = await db('Observer')
         .select(
           'Observer.observer_id',
@@ -234,9 +140,7 @@ const getAllWorkOrders = async (req, res) => {
         )
         .join('User', 'Observer.user_id', 'User.user_id')
         .whereIn('Observer.work_order_id', orderIds);
-      
-      console.log(`👥 Всего загружено наблюдателей: ${observers.length}`);
-      
+
       observers.forEach(obs => {
         if (!observersMap[obs.work_order_id]) {
           observersMap[obs.work_order_id] = [];
@@ -252,55 +156,52 @@ const getAllWorkOrders = async (req, res) => {
           phone: obs.phone
         });
       });
-      
-      // Логируем количество наблюдателей для каждой заявки
-      Object.keys(observersMap).forEach(orderId => {
-        console.log(`  Заявка #${orderId}: ${observersMap[orderId].length} наблюдателей`);
-      });
     }
 
-    // ==========================================
-    // ФОРМАТИРОВАНИЕ ДАННЫХ
-    // ==========================================
-    const formattedOrders = workOrders.map(order => ({
-      work_order_id: order.work_order_id,
-      name: order.name,
-      status: order.status,
-      priority: order.priority,
-      deadline: order.deadline ? 
-        new Date(order.deadline.getTime() - order.deadline.getTimezoneOffset() * 60000)
-          .toISOString()
-          .split('T')[0] : 
-        null,
-      description: order.description,
-      created_date: order.created_date,
-      comment: order.comment,
-      asset_id: order.asset_id,
-      asset_model: order.asset_model,
-      asset_number: order.asset_number,
-      category_id: order.category_id,
-      category_name: order.category_name,
-      customer_id: order.customer_id,
-      customer: {
-        last_name: order.customer_last_name,
-        first_name: order.customer_first_name,
-        middle_name: order.customer_middle_name
-      },
-      performer_id: order.performer_id,
-      foreman_id: order.foreman_id,
-      foreman: order.foreman_last_name ? {
-        last_name: order.foreman_last_name,
-        first_name: order.foreman_first_name,
-        middle_name: order.foreman_middle_name
-      } : null,
-      crew_id: order.crew_id,
-      performer_name: order.foreman_last_name 
-        ? `${order.foreman_last_name} ${order.foreman_first_name}${order.foreman_middle_name ? ' ' + order.foreman_middle_name : ''}`
-        : 'Не назначен',
-      observers: observersMap[order.work_order_id] || []
-    }));
+    // Форматирование данных
+    const formattedOrders = workOrders.map(order => {
+      const foremanName = order.foreman_last_name
+        ? [order.foreman_last_name, order.foreman_first_name, order.foreman_middle_name]
+            .filter(Boolean)
+            .join(' ')
+        : null;
 
-    console.log(`✅ Отправка ответа: ${formattedOrders.length} заявок`);
+      return {
+        work_order_id: order.work_order_id,
+        name: order.name,
+        status: order.status,
+        priority: order.priority,
+        deadline: order.deadline
+          ? new Date(order.deadline).toISOString().split('T')[0]
+          : null,
+        description: order.description,
+        created_date: order.created_date,
+        comment: order.comment,
+        asset_id: order.asset_id,
+        asset_model: order.asset_model,
+        asset_number: order.asset_number,
+        category_id: order.category_id,
+        category_name: order.category_name,
+        customer_id: order.customer_id,
+        customer: {
+          last_name: order.customer_last_name,
+          first_name: order.customer_first_name,
+          middle_name: order.customer_middle_name
+        },
+        performer_id: order.performer_id,
+        foreman_id: order.foreman_id,
+        foreman: order.foreman_last_name
+          ? {
+              last_name: order.foreman_last_name,
+              first_name: order.foreman_first_name,
+              middle_name: order.foreman_middle_name
+            }
+          : null,
+        crew_id: order.crew_id,
+        performer_name: foremanName || 'Не назначен',
+        observers: observersMap[order.work_order_id] || []
+      };
+    });
 
     res.status(200).json({
       status: 'success',
@@ -309,16 +210,16 @@ const getAllWorkOrders = async (req, res) => {
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: total,
-          totalPages: Math.ceil(total / limit)
+          total,
+          totalPages: Math.ceil(total / parseInt(limit))
         }
       }
     });
   } catch (error) {
-    console.error('❌ Ошибка получения списка заявок:', error);
+    console.error('Get all work orders error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Ошибка при получении списка заявок: ' + error.message
+      message: 'Ошибка при получении списка заявок.'
     });
   }
 };
@@ -335,12 +236,15 @@ const getWorkOrderById = async (req, res) => {
         'Category.name as category_name',
         'Customer_User.last_name as customer_last_name',
         'Customer_User.first_name as customer_first_name',
+        'Customer_User.middle_name as customer_middle_name',
         'Customer_User.email as customer_email',
         'Customer_User.phone as customer_phone',
         'Foreman_User.last_name as foreman_last_name',
         'Foreman_User.first_name as foreman_first_name',
+        'Foreman_User.middle_name as foreman_middle_name',
         'Foreman.foreman_id',
-        'Performer.crew_id'
+        'Performer.crew_id',
+        'Performer.performer_id'
       )
       .leftJoin('Asset', 'WorkOrder.asset_id', 'Asset.asset_id')
       .leftJoin('Category', 'WorkOrder.category_id', 'Category.category_id')
@@ -359,34 +263,81 @@ const getWorkOrderById = async (req, res) => {
       });
     }
 
+    // Загружаем наблюдателей с полной информацией
     const observers = await db('Observer')
       .select(
+        'Observer.observer_id',
         'User.user_id',
         'User.last_name',
         'User.first_name',
-        'User.email'
+        'User.middle_name',
+        'User.email',
+        'User.phone',
+        'User.position'
       )
       .join('User', 'Observer.user_id', 'User.user_id')
       .where('Observer.work_order_id', id);
 
-    // Форматируем дату для корректного отображения
-    let formattedDeadline = null
-    if (workOrder.deadline) {
-      const date = new Date(workOrder.deadline)
-      // Компенсируем часовой пояс
-      formattedDeadline = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-        .toISOString()
-        .split('T')[0]
+    // Загружаем монтажников бригады, если есть crew_id
+    let crewInstallers = [];
+    if (workOrder.crew_id) {
+      crewInstallers = await db('Crew_Installer')
+        .select(
+          'Installer.installer_id',
+          'Installer_User.user_id',
+          'Installer_User.last_name',
+          'Installer_User.first_name',
+          'Installer_User.middle_name'
+        )
+        .join('Installer', 'Crew_Installer.installer_id', 'Installer.installer_id')
+        .join('User as Installer_User', 'Installer.user_id', 'Installer_User.user_id')
+        .where('Crew_Installer.crew_id', workOrder.crew_id);
     }
+
+    const foremanName = workOrder.foreman_last_name
+      ? [workOrder.foreman_last_name, workOrder.foreman_first_name, workOrder.foreman_middle_name]
+          .filter(Boolean)
+          .join(' ')
+      : null;
 
     const result = {
       ...workOrder,
-      deadline: formattedDeadline,  // Отдаем скорректированную дату
-      performer_name: workOrder.foreman_last_name 
-        ? `${workOrder.foreman_last_name} ${workOrder.foreman_first_name}`
-        : 'Не назначен',
+      deadline: workOrder.deadline
+        ? new Date(workOrder.deadline).toISOString().split('T')[0]
+        : null,
+      performer_name: foremanName || 'Не назначен',
+      customer: {
+        last_name: workOrder.customer_last_name,
+        first_name: workOrder.customer_first_name,
+        middle_name: workOrder.customer_middle_name,
+        email: workOrder.customer_email,
+        phone: workOrder.customer_phone
+      },
+      foreman: workOrder.foreman_last_name
+        ? {
+            foreman_id: workOrder.foreman_id,
+            last_name: workOrder.foreman_last_name,
+            first_name: workOrder.foreman_first_name,
+            middle_name: workOrder.foreman_middle_name
+          }
+        : null,
+      crew_installers: crewInstallers.map(i => ({
+        installer_id: i.installer_id,
+        user_id: i.user_id,
+        full_name: [i.last_name, i.first_name, i.middle_name].filter(Boolean).join(' ')
+      })),
       observers
     };
+
+    // Удаляем лишние поля из ответа
+    delete result.customer_last_name;
+    delete result.customer_first_name;
+    delete result.customer_middle_name;
+    delete result.customer_email;
+    delete result.customer_phone;
+    delete result.foreman_last_name;
+    delete result.foreman_first_name;
+    delete result.foreman_middle_name;
 
     res.status(200).json({
       status: 'success',
@@ -396,7 +347,7 @@ const getWorkOrderById = async (req, res) => {
     console.error('Get work order by id error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Ошибка при получении заявки: ' + error.message
+      message: 'Ошибка при получении заявки.'
     });
   }
 };
@@ -405,23 +356,20 @@ const createWorkOrder = async (req, res) => {
   const trx = await db.transaction();
 
   try {
-    const { 
-      assetId, 
-      categoryId, 
-      name, 
-      description, 
-      priority, 
+    const {
+      assetId,
+      categoryId,
+      name,
+      description,
+      priority,
       deadline,
       foremanId,
-      observerIds  // Массив ID пользователей-наблюдателей
+      crewId,
+      observerIds
     } = req.body;
 
-    console.log('📝 Создание заявки с данными:', {
-      assetId, categoryId, name, foremanId,
-      observerIds: observerIds || 'не указаны'
-    });
-
-    if (!assetId || !categoryId || !name) {
+    // Валидация
+    if (!assetId || !categoryId || !name || !name.trim()) {
       await trx.rollback();
       return res.status(400).json({
         status: 'error',
@@ -435,19 +383,19 @@ const createWorkOrder = async (req, res) => {
       .first();
 
     if (!customer) {
-      const [customerId] = await trx('Customer').insert({
-        user_id: req.user.id
-      });
+      const [customerId] = await trx('Customer')
+        .insert({ user_id: req.user.id })
+        .returning('customer_id');
       customer = { customer_id: customerId };
     }
 
-    // Создаем исполнителя только если указан бригадир
+    // Создаем исполнителя, если указан бригадир
     let performerId = null;
     if (foremanId) {
       const foreman = await trx('Foreman')
-        .where('foreman_id', foremanId)
+        .where('foreman_id', parseInt(foremanId))
         .first();
-      
+
       if (!foreman) {
         await trx.rollback();
         return res.status(400).json({
@@ -456,101 +404,59 @@ const createWorkOrder = async (req, res) => {
         });
       }
 
-      const [newPerformerId] = await trx('Performer').insert({
-        foreman_id: foremanId,
-        crew_id: null
-      });
+      const [newPerformerId] = await trx('Performer')
+        .insert({
+          foreman_id: parseInt(foremanId),
+          crew_id: crewId ? parseInt(crewId) : null
+        })
+        .returning('performer_id');
+
       performerId = newPerformerId;
     }
 
     // Создаем заявку
-    const [workOrderId] = await trx('WorkOrder').insert({
-      asset_id: parseInt(assetId),
-      customer_id: customer.customer_id,
-      performer_id: performerId,
-      category_id: parseInt(categoryId),
-      name: String(name).trim(),
-      description: description ? String(description).trim() : null,
-      priority: priority || 'Средний',
-      deadline: deadline || null,
-      status: 'Новая',
-      created_date: new Date()
-    });
+    const [workOrderId] = await trx('WorkOrder')
+      .insert({
+        asset_id: parseInt(assetId),
+        customer_id: customer.customer_id,
+        performer_id: performerId,
+        category_id: parseInt(categoryId),
+        name: name.trim(),
+        description: description ? description.trim() : null,
+        priority: priority || 'Средний',
+        deadline: deadline || null,
+        status: 'Новая',
+        created_date: trx.fn.now()
+      })
+      .returning('work_order_id');
 
-    console.log('✅ Заявка создана, ID:', workOrderId);
-
-    // ==========================================
-    // ДОБАВЛЕНИЕ НАБЛЮДАТЕЛЕЙ
-    // ==========================================
+    // Добавляем наблюдателей
     if (observerIds && Array.isArray(observerIds) && observerIds.length > 0) {
-      console.log('👥 Добавление наблюдателей:', observerIds);
-      
-      // Фильтруем и подготавливаем данные
-      const observersToAdd = [];
-      
-      for (const userId of observerIds) {
-        if (!userId) continue;
-        
-        // Проверяем существование пользователя
-        const user = await trx('User')
-          .where('user_id', parseInt(userId))
-          .first();
-        
-        if (user) {
-          // Проверяем, нет ли уже такого наблюдателя
-          const existingObserver = await trx('Observer')
-            .where({
-              work_order_id: workOrderId,
-              user_id: parseInt(userId)
-            })
-            .first();
-          
-          if (!existingObserver) {
-            observersToAdd.push({
-              work_order_id: workOrderId,
-              user_id: parseInt(userId)
-            });
-            console.log(`  ✅ Пользователь ${userId} (${user.last_name} ${user.first_name}) будет добавлен`);
-          } else {
-            console.log(`  ⚠️ Пользователь ${userId} уже наблюдатель`);
-          }
-        } else {
-          console.log(`  ❌ Пользователь ${userId} не найден`);
-        }
-      }
+      const validObserverIds = observerIds
+        .filter(Boolean)
+        .map(id => parseInt(id));
 
-      // Добавляем наблюдателей
-      if (observersToAdd.length > 0) {
-        try {
+      if (validObserverIds.length > 0) {
+        // Проверяем существование пользователей
+        const users = await trx('User')
+          .whereIn('user_id', validObserverIds)
+          .select('user_id');
+
+        const existingUserIds = users.map(u => u.user_id);
+        const observersToAdd = existingUserIds.map(userId => ({
+          work_order_id: workOrderId,
+          user_id: userId
+        }));
+
+        if (observersToAdd.length > 0) {
           await trx('Observer').insert(observersToAdd);
-          console.log(`✅ Добавлено ${observersToAdd.length} наблюдателей`);
-        } catch (error) {
-          console.error('❌ Ошибка при добавлении наблюдателей:', error.message);
-          // Проверяем на дубликаты
-          if (error.code === 'ER_DUP_ENTRY') {
-            console.log('⚠️ Некоторые наблюдатели уже существуют, пробуем добавить по одному');
-            
-            for (const observer of observersToAdd) {
-              try {
-                await trx('Observer').insert(observer);
-                console.log(`  ✅ Добавлен наблюдатель user_id=${observer.user_id}`);
-              } catch (insertError) {
-                console.log(`  ⚠️ Наблюдатель user_id=${observer.user_id} уже существует`);
-              }
-            }
-          } else {
-            throw error;
-          }
         }
-      } else {
-        console.log('ℹ️ Нет наблюдателей для добавления');
       }
     }
 
     await trx.commit();
-    console.log('✅ Транзакция успешно завершена');
 
-    // Получаем созданную заявку с наблюдателями
+    // Получаем созданную заявку
     const createdWorkOrder = await db('WorkOrder')
       .select(
         'WorkOrder.*',
@@ -568,7 +474,6 @@ const createWorkOrder = async (req, res) => {
       .where('WorkOrder.work_order_id', workOrderId)
       .first();
 
-    // Получаем наблюдателей
     const observers = await db('Observer')
       .select(
         'User.user_id',
@@ -579,34 +484,33 @@ const createWorkOrder = async (req, res) => {
       .join('User', 'Observer.user_id', 'User.user_id')
       .where('Observer.work_order_id', workOrderId);
 
-    console.log(`📊 Итого наблюдателей у заявки #${workOrderId}: ${observers.length}`);
-
     res.status(201).json({
       status: 'success',
       data: {
         ...createdWorkOrder,
+        deadline: createdWorkOrder.deadline
+          ? new Date(createdWorkOrder.deadline).toISOString().split('T')[0]
+          : null,
         observers
       },
       message: 'Заявка успешно создана'
     });
   } catch (error) {
     await trx.rollback();
-    console.error('❌ Ошибка создания заявки:', error);
+    console.error('Create work order error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Ошибка при создании заявки: ' + error.message
+      message: 'Ошибка при создании заявки.'
     });
   }
 };
 
 const updateWorkOrder = async (req, res) => {
   const trx = await db.transaction();
-  
+
   try {
     const { id } = req.params;
-    
-    console.log('📝 Обновление заявки #' + id, req.body);
-    
+
     // Проверяем существование заявки
     const workOrder = await trx('WorkOrder')
       .where('work_order_id', id)
@@ -621,49 +525,43 @@ const updateWorkOrder = async (req, res) => {
     }
 
     const updates = {};
-    
-    // Обновление строковых полей
-    if (req.body.name !== undefined && req.body.name !== null) {
-      updates.name = String(req.body.name).trim();
+
+    // Обновление полей
+    if (req.body.name !== undefined) {
+      updates.name = req.body.name ? req.body.name.trim() : null;
     }
     if (req.body.description !== undefined) {
-      updates.description = req.body.description ? String(req.body.description).trim() : null;
+      updates.description = req.body.description ? req.body.description.trim() : null;
     }
     if (req.body.comment !== undefined) {
-      updates.comment = req.body.comment ? String(req.body.comment).trim() : null;
+      updates.comment = req.body.comment ? req.body.comment.trim() : null;
     }
-    
-    // Обновление статуса и приоритета
-    if (req.body.status !== undefined && req.body.status !== null) {
+    if (req.body.status !== undefined) {
       updates.status = req.body.status;
     }
-    if (req.body.priority !== undefined && req.body.priority !== null) {
+    if (req.body.priority !== undefined) {
       updates.priority = req.body.priority;
     }
-    
-    // Обновление дат и числовых полей
     if (req.body.deadline !== undefined) {
       updates.deadline = req.body.deadline || null;
     }
-    if (req.body.assetId !== undefined && req.body.assetId !== null) {
-      updates.asset_id = parseInt(req.body.assetId);
+    if (req.body.assetId !== undefined) {
+      updates.asset_id = req.body.assetId ? parseInt(req.body.assetId) : null;
     }
-    if (req.body.categoryId !== undefined && req.body.categoryId !== null) {
-      updates.category_id = parseInt(req.body.categoryId);
+    if (req.body.categoryId !== undefined) {
+      updates.category_id = req.body.categoryId ? parseInt(req.body.categoryId) : null;
     }
-    
-    // ==========================================
-    // ОБРАБОТКА ИСПОЛНИТЕЛЯ (БРИГАДИРА)
-    // ==========================================
+
+    // Обработка исполнителя
     if (req.body.foremanId !== undefined) {
       const foremanId = req.body.foremanId ? parseInt(req.body.foremanId) : null;
-      
+      const crewId = req.body.crewId ? parseInt(req.body.crewId) : null;
+
       if (foremanId) {
-        // Проверяем существование бригадира
         const foreman = await trx('Foreman')
           .where('foreman_id', foremanId)
           .first();
-        
+
         if (!foreman) {
           await trx.rollback();
           return res.status(400).json({
@@ -672,117 +570,70 @@ const updateWorkOrder = async (req, res) => {
           });
         }
 
-        // Создаем нового исполнителя для этой заявки
-        const [newPerformerId] = await trx('Performer').insert({
-          foreman_id: foremanId,
-          crew_id: null
-        });
+        // Удаляем старого исполнителя, если был
+        if (workOrder.performer_id) {
+          await trx('Performer')
+            .where('performer_id', workOrder.performer_id)
+            .del();
+        }
+
+        // Создаем нового исполнителя
+        const [newPerformerId] = await trx('Performer')
+          .insert({
+            foreman_id: foremanId,
+            crew_id: crewId
+          })
+          .returning('performer_id');
+
         updates.performer_id = newPerformerId;
-        console.log(`✅ Создан новый исполнитель #${newPerformerId} для бригадира #${foremanId}`);
       } else {
+        // Удаляем исполнителя
+        if (workOrder.performer_id) {
+          await trx('Performer')
+            .where('performer_id', workOrder.performer_id)
+            .del();
+        }
         updates.performer_id = null;
-        console.log('ℹ️ Исполнитель удален');
       }
     }
 
-    // ==========================================
-    // ОБНОВЛЕНИЕ ОСНОВНЫХ ДАННЫХ ЗАЯВКИ
-    // ==========================================
+    // Обновляем основные данные заявки
     if (Object.keys(updates).length > 0) {
       await trx('WorkOrder')
         .where('work_order_id', id)
         .update(updates);
-      console.log('✅ Основные данные заявки обновлены');
     }
 
-    // ==========================================
-    // ОБРАБОТКА НАБЛЮДАТЕЛЕЙ
-    // ==========================================
+    // Обработка наблюдателей
     if (req.body.observerIds !== undefined) {
-      console.log('👥 Обновление наблюдателей для заявки #' + id);
-      console.log('  Новый список наблюдателей:', req.body.observerIds);
-      
-      // Удаляем всех текущих наблюдателей для этой заявки
-      await trx('Observer')
-        .where('work_order_id', id)
-        .del();
-      console.log('  🗑️ Старые наблюдатели удалены');
-      
-      // Добавляем новых наблюдателей
-      if (req.body.observerIds && Array.isArray(req.body.observerIds) && req.body.observerIds.length > 0) {
-        const observersToAdd = [];
-        const errors = [];
-        
-        for (const userId of req.body.observerIds) {
-          if (!userId) continue;
-          
-          const parsedUserId = parseInt(userId);
-          
-          // Проверяем существование пользователя
-          const user = await trx('User')
-            .where('user_id', parsedUserId)
-            .first();
-          
-          if (user) {
-            observersToAdd.push({
-              work_order_id: parseInt(id),
-              user_id: parsedUserId
-            });
-            console.log(`  ✅ Пользователь #${parsedUserId} (${user.last_name} ${user.first_name}) добавлен`);
-          } else {
-            const errorMsg = `Пользователь с ID ${parsedUserId} не найден`;
-            errors.push(errorMsg);
-            console.log(`  ❌ ${errorMsg}`);
-          }
-        }
+      // Удаляем старых наблюдателей
+      await trx('Observer').where('work_order_id', id).del();
 
-        // Добавляем валидных наблюдателей
-        if (observersToAdd.length > 0) {
-          try {
+      // Добавляем новых
+      if (req.body.observerIds && Array.isArray(req.body.observerIds) && req.body.observerIds.length > 0) {
+        const validIds = req.body.observerIds
+          .filter(Boolean)
+          .map(oid => parseInt(oid));
+
+        if (validIds.length > 0) {
+          const users = await trx('User')
+            .whereIn('user_id', validIds)
+            .select('user_id');
+
+          const observersToAdd = users.map(u => ({
+            work_order_id: parseInt(id),
+            user_id: u.user_id
+          }));
+
+          if (observersToAdd.length > 0) {
             await trx('Observer').insert(observersToAdd);
-            console.log(`  ✅ Успешно добавлено ${observersToAdd.length} наблюдателей`);
-          } catch (error) {
-            // Обрабатываем ошибку дубликатов
-            if (error.code === 'ER_DUP_ENTRY') {
-              console.log('  ⚠️ Обнаружены дубликаты, добавляем по одному');
-              
-              for (const observer of observersToAdd) {
-                try {
-                  await trx('Observer').insert(observer);
-                  console.log(`    ✅ Добавлен user_id=${observer.user_id}`);
-                } catch (insertError) {
-                  if (insertError.code === 'ER_DUP_ENTRY') {
-                    console.log(`    ⚠️ Пропущен дубликат user_id=${observer.user_id}`);
-                  } else {
-                    throw insertError;
-                  }
-                }
-              }
-            } else {
-              throw error;
-            }
           }
-        } else {
-          console.log('  ℹ️ Нет валидных наблюдателей для добавления');
         }
-        
-        // Если были ошибки с пользователями, возвращаем предупреждение
-        if (errors.length > 0) {
-          console.log('  ⚠️ Предупреждения:', errors);
-        }
-      } else {
-        console.log('  ℹ️ Список наблюдателей пуст');
       }
     }
 
-    // Фиксируем транзакцию
     await trx.commit();
-    console.log('✅ Транзакция успешно завершена');
 
-    // ==========================================
-    // ПОЛУЧЕНИЕ ОБНОВЛЕННЫХ ДАННЫХ
-    // ==========================================
-    
     // Получаем обновленную заявку
     const updatedWorkOrder = await db('WorkOrder')
       .select(
@@ -805,7 +656,6 @@ const updateWorkOrder = async (req, res) => {
       .where('WorkOrder.work_order_id', id)
       .first();
 
-    // Получаем наблюдателей
     const observers = await db('Observer')
       .select(
         'Observer.observer_id',
@@ -819,32 +669,17 @@ const updateWorkOrder = async (req, res) => {
       .join('User', 'Observer.user_id', 'User.user_id')
       .where('Observer.work_order_id', id);
 
-    console.log(`📊 Итого наблюдателей у заявки #${id}: ${observers.length}`);
-
-    // Форматируем дату для корректного отображения
-    let formattedDeadline = null;
-    if (updatedWorkOrder.deadline) {
-      const date = new Date(updatedWorkOrder.deadline);
-      formattedDeadline = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-        .toISOString()
-        .split('T')[0];
-    }
-
-    // Формируем ответ
     const result = {
       ...updatedWorkOrder,
-      deadline: formattedDeadline,
-      performer_name: updatedWorkOrder.foreman_last_name 
-        ? `${updatedWorkOrder.foreman_last_name} ${updatedWorkOrder.foreman_first_name}`
+      deadline: updatedWorkOrder.deadline
+        ? new Date(updatedWorkOrder.deadline).toISOString().split('T')[0]
+        : null,
+      performer_name: updatedWorkOrder.foreman_last_name
+        ? [updatedWorkOrder.foreman_last_name, updatedWorkOrder.foreman_first_name]
+            .filter(Boolean)
+            .join(' ')
         : 'Не назначен',
-      observers: observers.map(obs => ({
-        user_id: obs.user_id,
-        last_name: obs.last_name,
-        first_name: obs.first_name,
-        middle_name: obs.middle_name,
-        email: obs.email,
-        position: obs.position
-      }))
+      observers
     };
 
     res.status(200).json({
@@ -852,55 +687,62 @@ const updateWorkOrder = async (req, res) => {
       data: result,
       message: 'Заявка успешно обновлена'
     });
-
   } catch (error) {
     await trx.rollback();
-    console.error('❌ Ошибка при обновлении заявки:', error);
+    console.error('Update work order error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Ошибка при обновлении заявки: ' + error.message
+      message: 'Ошибка при обновлении заявки.'
     });
   }
 };
 
 const deleteWorkOrder = async (req, res) => {
+  const trx = await db.transaction();
+
   try {
     const { id } = req.params;
 
-    const workOrder = await db('WorkOrder')
+    const workOrder = await trx('WorkOrder')
       .where('work_order_id', id)
       .first();
 
     if (!workOrder) {
+      await trx.rollback();
       return res.status(404).json({
         status: 'error',
         message: 'Заявка не найдена.'
       });
     }
 
-    await db('Observer')
-      .where('work_order_id', id)
-      .del();
+    // Удаляем наблюдателей
+    await trx('Observer').where('work_order_id', id).del();
 
-    await db('WorkOrder')
-      .where('work_order_id', id)
-      .del();
+    // Удаляем исполнителя
+    if (workOrder.performer_id) {
+      await trx('Performer').where('performer_id', workOrder.performer_id).del();
+    }
+
+    // Удаляем заявку
+    await trx('WorkOrder').where('work_order_id', id).del();
+
+    await trx.commit();
 
     res.status(200).json({
       status: 'success',
       message: 'Заявка успешно удалена.'
     });
   } catch (error) {
+    await trx.rollback();
     console.error('Delete work order error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Ошибка при удалении заявки: ' + error.message
+      message: 'Ошибка при удалении заявки.'
     });
   }
 };
 
 module.exports = {
-  saveWorkOrder,
   getAllWorkOrders,
   getWorkOrderById,
   createWorkOrder,

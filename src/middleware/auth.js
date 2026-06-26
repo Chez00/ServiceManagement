@@ -3,103 +3,130 @@ const db = require('../config/database');
 
 const protect = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ message: 'Не авторизован' });
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Не авторизован. Токен не предоставлен.'
+      });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const token = authHeader.split(' ')[1];
     
+    if (!token) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Не авторизован. Токен не предоставлен.'
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (jwtError) {
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Срок действия токена истёк.'
+        });
+      }
+      return res.status(401).json({
+        status: 'error',
+        message: 'Недействительный токен.'
+      });
+    }
+
+    if (!decoded.id) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Недействительный токен.'
+      });
+    }
+
     // Получаем пользователя
     const user = await db('User')
       .where('user_id', decoded.id)
       .first();
-    
+
     if (!user) {
-      return res.status(401).json({ message: 'Пользователь не найден' });
+      return res.status(401).json({
+        status: 'error',
+        message: 'Пользователь не найден.'
+      });
     }
 
-    // Получаем роли пользователя на основе должности и связей
-    const roles = [];
-    let customerId = null;
-    let foremanId = null;
-    let installerId = null;
-    
-    // Проверяем должность
+    // Получаем все роли параллельно
+    const [customer, foreman, installer] = await Promise.all([
+      db('Customer').where('user_id', user.user_id).first(),
+      db('Foreman').where('user_id', user.user_id).first(),
+      db('Installer').where('user_id', user.user_id).first()
+    ]);
+
+    // Формируем роли
+    const userRoles = [];
     if (user.position === 'Администратор') {
-      roles.push('admin');
+      userRoles.push('admin');
     }
-    
-    // Проверяем, является ли заказчиком
-    const customer = await db('Customer').where('user_id', user.user_id).first();
     if (customer) {
-      roles.push('customer');
-      customerId = customer.customer_id;
+      userRoles.push('customer');
     }
-    
-    // Проверяем, является ли бригадиром
-    const foreman = await db('Foreman').where('user_id', user.user_id).first();
     if (foreman) {
-      roles.push('foreman');
-      foremanId = foreman.foreman_id;
+      userRoles.push('foreman');
     }
-    
-    // Проверяем, является ли монтажником
-    const installer = await db('Installer').where('user_id', user.user_id).first();
     if (installer) {
-      roles.push('installer');
-      installerId = installer.installer_id;
+      userRoles.push('installer');
     }
 
+    // Если нет ни одной роли, добавляем базовую
+    if (userRoles.length === 0) {
+      userRoles.push('user');
+    }
+
+    // Сохраняем всё в req для использования в контроллерах и authorize
     req.user = {
       id: user.user_id,
       email: user.email,
       firstName: user.first_name,
       lastName: user.last_name,
       position: user.position,
-      roles: roles,
-      customerId: customerId,
-      foremanId: foremanId,
-      installerId: installerId
+      phone: user.phone,
+      departmentId: user.department_id
     };
+
+    req.userRoles = userRoles;
+    req.customerId = customer ? customer.customer_id : null;
+    req.foremanId = foreman ? foreman.foreman_id : null;
+    req.installerId = installer ? installer.installer_id : null;
 
     next();
   } catch (error) {
-    console.error('Auth error:', error);
-    return res.status(401).json({ message: 'Не авторизован' });
+    console.error('Auth middleware error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Ошибка авторизации.'
+    });
   }
 };
 
-const authorize = (...roles) => {
-  return async (req, res, next) => {
+const authorize = (...allowedRoles) => {
+  return (req, res, next) => {
     try {
-      // Проверяем, является ли пользователь администратором по должности
-      const isAdmin = req.user.position === 'Администратор';
-      
-      // Если требуется роль admin и пользователь администратор - пропускаем
-      if (roles.includes('admin') && isAdmin) {
-        req.userRoles = ['admin'];
-        next();
-        return;
+      // Если пользователь не авторизован
+      if (!req.user || !req.userRoles) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Не авторизован.'
+        });
       }
 
-      // Проверяем роли в базе данных
-      const customer = await db('Customer').where('user_id', req.user.id).first();
-      const foreman = await db('Foreman').where('user_id', req.user.id).first();
-      const installer = await db('Installer').where('user_id', req.user.id).first();
+      // Администратор имеет доступ ко всему
+      if (req.userRoles.includes('admin')) {
+        return next();
+      }
 
-      const userRoles = [];
-      
-      // Добавляем роль admin для администраторов
-      if (isAdmin) userRoles.push('admin');
-      if (customer) userRoles.push('customer');
-      if (foreman) userRoles.push('foreman');
-      if (installer) userRoles.push('installer');
-      
-      // If user doesn't have specific role, they are a regular user
-      if (userRoles.length === 0) userRoles.push('user');
-
-      const hasRole = roles.some(role => userRoles.includes(role));
+      // Проверяем, есть ли у пользователя хотя бы одна из требуемых ролей
+      const hasRole = allowedRoles.some(role => req.userRoles.includes(role));
 
       if (!hasRole) {
         return res.status(403).json({
@@ -108,14 +135,9 @@ const authorize = (...roles) => {
         });
       }
 
-      // Add roles to request
-      req.userRoles = userRoles;
-      if (customer) req.customerId = customer.customer_id;
-      if (foreman) req.foremanId = foreman.foreman_id;
-      if (installer) req.installerId = installer.installer_id;
-
       next();
     } catch (error) {
+      console.error('Authorize middleware error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Ошибка при проверке прав доступа.'

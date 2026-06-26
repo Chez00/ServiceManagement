@@ -18,13 +18,39 @@ const generateRefreshToken = (userId) => {
   );
 };
 
+// Вынес определение ролей в отдельную функцию
+const getUserRoles = async (userId, position) => {
+  const [customer, foreman, installer] = await Promise.all([
+    db('Customer').where('user_id', userId).first(),
+    db('Foreman').where('user_id', userId).first(),
+    db('Installer').where('user_id', userId).first()
+  ]);
+
+  const roles = [];
+  if (position === 'Администратор') roles.push('admin');
+  if (customer) roles.push('customer');
+  if (foreman) roles.push('foreman');
+  if (installer) roles.push('installer');
+
+  return roles;
+};
+
 const register = async (req, res) => {
   const trx = await db.transaction();
 
   try {
     const { email, password, firstName, lastName, middleName, phone, departmentId, position } = req.body;
 
-    // Check if user exists
+    // Валидация обязательных полей
+    if (!email || !password) {
+      await trx.rollback();
+      return res.status(400).json({
+        status: 'error',
+        message: 'Email и пароль обязательны.'
+      });
+    }
+
+    // Проверка существующего пользователя
     const existingUser = await trx('User').where('email', email).first();
     if (existingUser) {
       await trx.rollback();
@@ -34,11 +60,11 @@ const register = async (req, res) => {
       });
     }
 
-    // Hash password
+    // Хеширование пароля
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create user
+    // Создание пользователя
     const [userId] = await trx('User').insert({
       email,
       password: hashedPassword,
@@ -47,17 +73,14 @@ const register = async (req, res) => {
       middle_name: middleName,
       phone,
       department_id: departmentId || null,
-      position: position || null // Добавлена должность при регистрации
-    });
+      position: position || null
+    }).returning('user_id');
 
     await trx.commit();
 
-    // Получаем созданного пользователя для определения ролей
+    // Получаем роли после commit
     const user = await db('User').where('user_id', userId).first();
-    
-    // Определяем роли
-    const roles = [];
-    if (user.position === 'Администратор') roles.push('admin');
+    const roles = await getUserRoles(userId, user.position);
 
     const token = generateToken(userId);
     const refreshToken = generateRefreshToken(userId);
@@ -91,10 +114,15 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Find user
-    const user = await db('User')
-      .where('email', email)
-      .first();
+    if (!email || !password) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Email и пароль обязательны.'
+      });
+    }
+
+    // Поиск пользователя
+    const user = await db('User').where('email', email).first();
 
     if (!user) {
       return res.status(401).json({
@@ -103,7 +131,7 @@ const login = async (req, res) => {
       });
     }
 
-    // Check password
+    // Проверка пароля
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({
@@ -115,21 +143,7 @@ const login = async (req, res) => {
     const token = generateToken(user.user_id);
     const refreshToken = generateRefreshToken(user.user_id);
 
-    // Get user roles
-    const customer = await db('Customer').where('user_id', user.user_id).first();
-    const foreman = await db('Foreman').where('user_id', user.user_id).first();
-    const installer = await db('Installer').where('user_id', user.user_id).first();
-
-    const roles = [];
-    
-    // Добавляем роль admin для администраторов
-    if (user.position === 'Администратор') {
-      roles.push('admin');
-    }
-    
-    if (customer) roles.push('customer');
-    if (foreman) roles.push('foreman');
-    if (installer) roles.push('installer');
+    const roles = await getUserRoles(user.user_id, user.position);
 
     res.status(200).json({
       status: 'success',
@@ -166,7 +180,15 @@ const refreshToken = async (req, res) => {
       });
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    } catch (jwtError) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Недействительный refresh token.'
+      });
+    }
 
     const user = await db('User').where('user_id', decoded.id).first();
     if (!user) {
@@ -179,16 +201,7 @@ const refreshToken = async (req, res) => {
     const newToken = generateToken(user.user_id);
     const newRefreshToken = generateRefreshToken(user.user_id);
 
-    // Определяем роли для обновленного ответа
-    const customer = await db('Customer').where('user_id', user.user_id).first();
-    const foreman = await db('Foreman').where('user_id', user.user_id).first();
-    const installer = await db('Installer').where('user_id', user.user_id).first();
-
-    const roles = [];
-    if (user.position === 'Администратор') roles.push('admin');
-    if (customer) roles.push('customer');
-    if (foreman) roles.push('foreman');
-    if (installer) roles.push('installer');
+    const roles = await getUserRoles(user.user_id, user.position);
 
     res.status(200).json({
       status: 'success',
@@ -206,6 +219,7 @@ const refreshToken = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Refresh token error:', error);
     res.status(401).json({
       status: 'error',
       message: 'Недействительный refresh token.'
@@ -214,7 +228,6 @@ const refreshToken = async (req, res) => {
 };
 
 const logout = async (req, res) => {
-  // In a more complete implementation, you would blacklist the token
   res.status(200).json({
     status: 'success',
     message: 'Успешный выход из системы.'
@@ -245,21 +258,7 @@ const getCurrentUser = async (req, res) => {
       });
     }
 
-    // Get roles
-    const customer = await db('Customer').where('user_id', user.user_id).first();
-    const foreman = await db('Foreman').where('user_id', user.user_id).first();
-    const installer = await db('Installer').where('user_id', user.user_id).first();
-
-    const roles = [];
-    
-    // Добавляем роль admin для администраторов
-    if (user.position === 'Администратор') {
-      roles.push('admin');
-    }
-    
-    if (customer) roles.push('customer');
-    if (foreman) roles.push('foreman');
-    if (installer) roles.push('installer');
+    const roles = await getUserRoles(req.user.id, user.position);
 
     res.status(200).json({
       status: 'success',

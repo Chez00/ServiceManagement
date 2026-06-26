@@ -6,18 +6,20 @@ const isAdmin = (req) => {
   return req.userRoles?.includes('admin') || req.user?.position === 'Администратор';
 };
 
-// Вспомогательная функция для получения ролей пользователя
+// Вспомогательная функция для получения ролей пользователя (оптимизированная)
 const getUserRoles = async (userId, position = null) => {
-  const customer = await db('Customer').where('user_id', userId).first();
-  const foreman = await db('Foreman').where('user_id', userId).first();
-  const installer = await db('Installer').where('user_id', userId).first();
-  
+  const [customer, foreman, installer] = await Promise.all([
+    db('Customer').where('user_id', userId).first(),
+    db('Foreman').where('user_id', userId).first(),
+    db('Installer').where('user_id', userId).first()
+  ]);
+
   const roles = [];
   if (position === 'Администратор') roles.push('admin');
   if (customer) roles.push('customer');
   if (foreman) roles.push('foreman');
   if (installer) roles.push('installer');
-  
+
   return {
     roles,
     isForeman: !!foreman,
@@ -27,6 +29,57 @@ const getUserRoles = async (userId, position = null) => {
     isCustomer: !!customer,
     customer_id: customer ? customer.customer_id : null
   };
+};
+
+// Получение ролей для списка пользователей (оптимизировано)
+const getUsersRoles = async (userIds) => {
+  if (!userIds.length) return {};
+
+  const [customers, foremen, installers] = await Promise.all([
+    db('Customer').whereIn('user_id', userIds),
+    db('Foreman').whereIn('user_id', userIds),
+    db('Installer').whereIn('user_id', userIds)
+  ]);
+
+  const rolesMap = {};
+
+  userIds.forEach(userId => {
+    rolesMap[userId] = {
+      roles: [],
+      isForeman: false,
+      foreman_id: null,
+      isInstaller: false,
+      installer_id: null,
+      isCustomer: false,
+      customer_id: null
+    };
+  });
+
+  customers.forEach(c => {
+    if (rolesMap[c.user_id]) {
+      rolesMap[c.user_id].roles.push('customer');
+      rolesMap[c.user_id].isCustomer = true;
+      rolesMap[c.user_id].customer_id = c.customer_id;
+    }
+  });
+
+  foremen.forEach(f => {
+    if (rolesMap[f.user_id]) {
+      rolesMap[f.user_id].roles.push('foreman');
+      rolesMap[f.user_id].isForeman = true;
+      rolesMap[f.user_id].foreman_id = f.foreman_id;
+    }
+  });
+
+  installers.forEach(i => {
+    if (rolesMap[i.user_id]) {
+      rolesMap[i.user_id].roles.push('installer');
+      rolesMap[i.user_id].isInstaller = true;
+      rolesMap[i.user_id].installer_id = i.installer_id;
+    }
+  });
+
+  return rolesMap;
 };
 
 const getAllUsers = async (req, res) => {
@@ -46,14 +99,20 @@ const getAllUsers = async (req, res) => {
       .leftJoin('Department', 'User.department_id', 'Department.department_id')
       .orderBy('User.last_name', 'asc');
 
-    // Получаем роли для каждого пользователя
-    const usersWithRoles = await Promise.all(users.map(async (user) => {
-      const rolesData = await getUserRoles(user.user_id, user.position);
-      
-      return {
-        ...user,
-        ...rolesData
-      };
+    // Получаем роли для всех пользователей одним запросом
+    const userIds = users.map(u => u.user_id);
+    const rolesMap = await getUsersRoles(userIds);
+
+    // Добавляем роль admin для администраторов
+    users.forEach(user => {
+      if (user.position === 'Администратор') {
+        rolesMap[user.user_id].roles.push('admin');
+      }
+    });
+
+    const usersWithRoles = users.map(user => ({
+      ...user,
+      ...rolesMap[user.user_id]
     }));
 
     res.status(200).json({
@@ -71,6 +130,8 @@ const getAllUsers = async (req, res) => {
 
 const getUserById = async (req, res) => {
   try {
+    const { id } = req.params;
+
     const user = await db('User')
       .select(
         'User.user_id',
@@ -84,7 +145,7 @@ const getUserById = async (req, res) => {
         'User.department_id'
       )
       .leftJoin('Department', 'User.department_id', 'Department.department_id')
-      .where('User.user_id', req.params.id)
+      .where('User.user_id', id)
       .first();
 
     if (!user) {
@@ -117,8 +178,8 @@ const updateUser = async (req, res) => {
 
   try {
     const { id } = req.params;
-    
-    // Проверяем права: только админ может редактировать пользователей
+
+    // Проверяем права
     if (!isAdmin(req)) {
       await trx.rollback();
       return res.status(403).json({
@@ -165,22 +226,86 @@ const updateUser = async (req, res) => {
 
     // Обновляем роли если переданы
     if (req.body.roles && Array.isArray(req.body.roles)) {
-      // Удаляем старые роли
-      await trx('Customer').where('user_id', id).del();
-      await trx('Foreman').where('user_id', id).del();
-      await trx('Installer').where('user_id', id).del();
+      // Получаем текущие роли
+      const existingRoles = await getUserRoles(id, existingUser.position);
+
+      // Определяем, какие роли нужно добавить/удалить
+      const rolesToAdd = req.body.roles.filter(r => r !== 'admin');
+      const rolesToRemove = existingRoles.roles.filter(r => r !== 'admin' && !req.body.roles.includes(r));
+
+      // Проверяем, можно ли удалить роли (нет ли связанных данных)
+      for (const role of rolesToRemove) {
+        if (role === 'foreman' && existingRoles.foreman_id) {
+          // Проверяем, есть ли активные заявки у бригадира
+          const hasActiveOrders = await trx('WorkOrder')
+            .join('Performer', 'WorkOrder.performer_id', 'Performer.performer_id')
+            .where('Performer.foreman_id', existingRoles.foreman_id)
+            .whereNotIn('WorkOrder.status', ['completed', 'cancelled'])
+            .first();
+
+          if (hasActiveOrders) {
+            await trx.rollback();
+            return res.status(400).json({
+              status: 'error',
+              message: 'Невозможно удалить роль бригадира. У бригадира есть активные заявки.'
+            });
+          }
+        }
+
+        if (role === 'installer' && existingRoles.installer_id) {
+          // Проверяем, состоит ли монтажник в бригаде с активными заявками
+          const crewWithActiveOrders = await trx('Crew_Installer')
+            .join('Crew', 'Crew_Installer.crew_id', 'Crew.crew_id')
+            .join('Performer', 'Crew.crew_id', 'Performer.crew_id')
+            .join('WorkOrder', 'Performer.performer_id', 'WorkOrder.performer_id')
+            .where('Crew_Installer.installer_id', existingRoles.installer_id)
+            .whereNotIn('WorkOrder.status', ['completed', 'cancelled'])
+            .first();
+
+          if (crewWithActiveOrders) {
+            await trx.rollback();
+            return res.status(400).json({
+              status: 'error',
+              message: 'Невозможно удалить роль монтажника. Монтажник состоит в бригаде с активными заявками.'
+            });
+          }
+        }
+      }
+
+      // Удаляем роли, которые нужно убрать
+      for (const role of rolesToRemove) {
+        if (role === 'customer') {
+          await trx('Customer').where('user_id', id).del();
+        }
+        if (role === 'foreman') {
+          // Удаляем связанные бригады
+          const crews = await trx('Crew').where('foreman_id', existingRoles.foreman_id);
+          for (const crew of crews) {
+            await trx('Crew_Installer').where('crew_id', crew.crew_id).del();
+            await trx('Performer').where('crew_id', crew.crew_id).del();
+          }
+          await trx('Crew').where('foreman_id', existingRoles.foreman_id).del();
+          await trx('Performer').where('foreman_id', existingRoles.foreman_id).del();
+          await trx('Foreman').where('user_id', id).del();
+        }
+        if (role === 'installer') {
+          await trx('Crew_Installer').where('installer_id', existingRoles.installer_id).del();
+          await trx('Installer').where('user_id', id).del();
+        }
+      }
 
       // Добавляем новые роли
-      if (req.body.roles.includes('customer')) {
-        await trx('Customer').insert({ user_id: parseInt(id) });
+      for (const role of rolesToAdd) {
+        if (role === 'customer' && !existingRoles.isCustomer) {
+          await trx('Customer').insert({ user_id: parseInt(id) });
+        }
+        if (role === 'foreman' && !existingRoles.isForeman) {
+          await trx('Foreman').insert({ user_id: parseInt(id) });
+        }
+        if (role === 'installer' && !existingRoles.isInstaller) {
+          await trx('Installer').insert({ user_id: parseInt(id) });
+        }
       }
-      if (req.body.roles.includes('foreman')) {
-        await trx('Foreman').insert({ user_id: parseInt(id) });
-      }
-      if (req.body.roles.includes('installer')) {
-        await trx('Installer').insert({ user_id: parseInt(id) });
-      }
-      // Роль admin определяется по должности, не нужно добавлять в таблицы
     }
 
     await trx.commit();
@@ -202,7 +327,6 @@ const updateUser = async (req, res) => {
       .where('User.user_id', id)
       .first();
 
-    // Получаем обновленные роли
     const rolesData = await getUserRoles(id, updatedUser.position);
 
     res.status(200).json({
@@ -229,7 +353,7 @@ const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Проверяем права: только админ может удалять пользователей
+    // Проверяем права
     if (!isAdmin(req)) {
       await trx.rollback();
       return res.status(403).json({
@@ -257,32 +381,60 @@ const deleteUser = async (req, res) => {
       });
     }
 
-    // Удаляем связанные роли
+    // Получаем текущие роли ДО удаления
+    const rolesData = await getUserRoles(id, user.position);
+
+    // Проверяем, можно ли удалить пользователя
+    if (rolesData.isForeman) {
+      const hasActiveOrders = await trx('WorkOrder')
+        .join('Performer', 'WorkOrder.performer_id', 'Performer.performer_id')
+        .where('Performer.foreman_id', rolesData.foreman_id)
+        .whereNotIn('WorkOrder.status', ['completed', 'cancelled'])
+        .first();
+
+      if (hasActiveOrders) {
+        await trx.rollback();
+        return res.status(400).json({
+          status: 'error',
+          message: 'Невозможно удалить пользователя. У бригадира есть активные заявки.'
+        });
+      }
+
+      // Удаляем связанные бригады и исполнителей
+      const crews = await trx('Crew').where('foreman_id', rolesData.foreman_id);
+      for (const crew of crews) {
+        await trx('Crew_Installer').where('crew_id', crew.crew_id).del();
+        await trx('Performer').where('crew_id', crew.crew_id).del();
+      }
+      await trx('Crew').where('foreman_id', rolesData.foreman_id).del();
+      await trx('Performer').where('foreman_id', rolesData.foreman_id).del();
+    }
+
+    if (rolesData.isInstaller) {
+      const hasActiveOrders = await trx('Crew_Installer')
+        .join('Crew', 'Crew_Installer.crew_id', 'Crew.crew_id')
+        .join('Performer', 'Crew.crew_id', 'Performer.crew_id')
+        .join('WorkOrder', 'Performer.performer_id', 'WorkOrder.performer_id')
+        .where('Crew_Installer.installer_id', rolesData.installer_id)
+        .whereNotIn('WorkOrder.status', ['completed', 'cancelled'])
+        .first();
+
+      if (hasActiveOrders) {
+        await trx.rollback();
+        return res.status(400).json({
+          status: 'error',
+          message: 'Невозможно удалить пользователя. Монтажник состоит в бригаде с активными заявками.'
+        });
+      }
+
+      await trx('Crew_Installer').where('installer_id', rolesData.installer_id).del();
+    }
+
+    // Удаляем роли
     await trx('Customer').where('user_id', id).del();
     await trx('Foreman').where('user_id', id).del();
     await trx('Installer').where('user_id', id).del();
-    
-    // Удаляем связи с наблюдателями
     await trx('Observer').where('user_id', id).del();
-    
-    // Удаляем связи с бригадами (если пользователь был бригадиром)
-    const foremanRecord = await trx('Foreman').where('user_id', id).first();
-    if (foremanRecord) {
-      // Находим все бригады этого бригадира
-      const crews = await trx('Crew').where('foreman_id', foremanRecord.foreman_id);
-      for (const crew of crews) {
-        // Удаляем монтажников из бригады
-        await trx('Crew_Installer').where('crew_id', crew.crew_id).del();
-      }
-      // Удаляем бригады
-      await trx('Crew').where('foreman_id', foremanRecord.foreman_id).del();
-    }
-    
-    // Удаляем связи с бригадами (если пользователь был монтажником)
-    const installerRecord = await trx('Installer').where('user_id', id).first();
-    if (installerRecord) {
-      await trx('Crew_Installer').where('installer_id', installerRecord.installer_id).del();
-    }
 
     // Удаляем пользователя
     await trx('User').where('user_id', id).del();
@@ -303,12 +455,10 @@ const deleteUser = async (req, res) => {
   }
 };
 
-// Назначить пользователя бригадиром
 const makeForeman = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Проверяем права: только админ может назначать роли
     if (!isAdmin(req)) {
       return res.status(403).json({
         status: 'error',
@@ -332,11 +482,13 @@ const makeForeman = async (req, res) => {
       });
     }
 
-    const [foremanId] = await db('Foreman').insert({ user_id: parseInt(userId) });
+    const [foreman] = await db('Foreman')
+      .insert({ user_id: parseInt(userId) })
+      .returning('*');
 
     res.status(201).json({
       status: 'success',
-      data: { foreman_id: foremanId },
+      data: foreman,
       message: 'Пользователь назначен бригадиром.'
     });
   } catch (error) {
@@ -348,12 +500,10 @@ const makeForeman = async (req, res) => {
   }
 };
 
-// Назначить пользователя монтажником
 const makeInstaller = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Проверяем права: только админ может назначать роли
     if (!isAdmin(req)) {
       return res.status(403).json({
         status: 'error',
@@ -377,11 +527,13 @@ const makeInstaller = async (req, res) => {
       });
     }
 
-    const [installerId] = await db('Installer').insert({ user_id: parseInt(userId) });
+    const [installer] = await db('Installer')
+      .insert({ user_id: parseInt(userId) })
+      .returning('*');
 
     res.status(201).json({
       status: 'success',
-      data: { installer_id: installerId },
+      data: installer,
       message: 'Пользователь назначен монтажником.'
     });
   } catch (error) {
@@ -393,14 +545,12 @@ const makeInstaller = async (req, res) => {
   }
 };
 
-// Удалить роль бригадира
 const removeForeman = async (req, res) => {
   const trx = await db.transaction();
-  
+
   try {
     const { userId } = req.params;
 
-    // Проверяем права: только админ может удалять роли
     if (!isAdmin(req)) {
       await trx.rollback();
       return res.status(403).json({
@@ -409,7 +559,6 @@ const removeForeman = async (req, res) => {
       });
     }
 
-    // Находим бригадира
     const foreman = await trx('Foreman').where('user_id', userId).first();
     if (!foreman) {
       await trx.rollback();
@@ -419,17 +568,33 @@ const removeForeman = async (req, res) => {
       });
     }
 
-    // Удаляем связанные бригады и их монтажников
+    // Проверяем активные заявки
+    const hasActiveOrders = await trx('WorkOrder')
+      .join('Performer', 'WorkOrder.performer_id', 'Performer.performer_id')
+      .where('Performer.foreman_id', foreman.foreman_id)
+      .whereNotIn('WorkOrder.status', ['completed', 'cancelled'])
+      .first();
+
+    if (hasActiveOrders) {
+      await trx.rollback();
+      return res.status(400).json({
+        status: 'error',
+        message: 'Невозможно удалить роль бригадира. Есть активные заявки.'
+      });
+    }
+
+    // Удаляем связанные бригады
     const crews = await trx('Crew').where('foreman_id', foreman.foreman_id);
     for (const crew of crews) {
       await trx('Crew_Installer').where('crew_id', crew.crew_id).del();
-      await trx('Crew').where('crew_id', crew.crew_id).del();
+      await trx('Performer').where('crew_id', crew.crew_id).del();
     }
+    await trx('Crew').where('foreman_id', foreman.foreman_id).del();
 
-    // Удаляем исполнителей (performers)
+    // Удаляем исполнителей
     await trx('Performer').where('foreman_id', foreman.foreman_id).del();
 
-    // Удаляем роль бригадира
+    // Удаляем роль
     await trx('Foreman').where('user_id', userId).del();
 
     await trx.commit();
@@ -448,14 +613,12 @@ const removeForeman = async (req, res) => {
   }
 };
 
-// Удалить роль монтажника
 const removeInstaller = async (req, res) => {
   const trx = await db.transaction();
-  
+
   try {
     const { userId } = req.params;
 
-    // Проверяем права: только админ может удалять роли
     if (!isAdmin(req)) {
       await trx.rollback();
       return res.status(403).json({
@@ -464,7 +627,6 @@ const removeInstaller = async (req, res) => {
       });
     }
 
-    // Находим монтажника
     const installer = await trx('Installer').where('user_id', userId).first();
     if (!installer) {
       await trx.rollback();
@@ -474,10 +636,27 @@ const removeInstaller = async (req, res) => {
       });
     }
 
+    // Проверяем активные заявки у бригад с этим монтажником
+    const hasActiveOrders = await trx('Crew_Installer')
+      .join('Crew', 'Crew_Installer.crew_id', 'Crew.crew_id')
+      .join('Performer', 'Crew.crew_id', 'Performer.crew_id')
+      .join('WorkOrder', 'Performer.performer_id', 'WorkOrder.performer_id')
+      .where('Crew_Installer.installer_id', installer.installer_id)
+      .whereNotIn('WorkOrder.status', ['completed', 'cancelled'])
+      .first();
+
+    if (hasActiveOrders) {
+      await trx.rollback();
+      return res.status(400).json({
+        status: 'error',
+        message: 'Невозможно удалить роль монтажника. Есть активные заявки у бригады.'
+      });
+    }
+
     // Удаляем связи с бригадами
     await trx('Crew_Installer').where('installer_id', installer.installer_id).del();
 
-    // Удаляем роль монтажника
+    // Удаляем роль
     await trx('Installer').where('user_id', userId).del();
 
     await trx.commit();
@@ -496,7 +675,6 @@ const removeInstaller = async (req, res) => {
   }
 };
 
-// Получить всех бригадиров
 const getForemen = async (req, res) => {
   try {
     const foremen = await db('Foreman')
@@ -525,7 +703,6 @@ const getForemen = async (req, res) => {
   }
 };
 
-// Получить всех монтажников
 const getInstallers = async (req, res) => {
   try {
     const installers = await db('Installer')
@@ -554,7 +731,6 @@ const getInstallers = async (req, res) => {
   }
 };
 
-// Получить всех исполнителей (performers)
 const getPerformers = async (req, res) => {
   try {
     const performers = await db('Performer')
@@ -574,8 +750,9 @@ const getPerformers = async (req, res) => {
       performer_id: p.performer_id,
       foreman_id: p.foreman_id,
       crew_id: p.crew_id,
-      name: [p.foreman_last_name, p.foreman_first_name].filter(Boolean).join(' ') + 
-            (p.crew_id ? ` (Бригада #${p.crew_id})` : '')
+      name: [p.foreman_last_name, p.foreman_first_name]
+        .filter(Boolean)
+        .join(' ') + (p.crew_id ? ` (Бригада #${p.crew_id})` : '')
     }));
 
     res.status(200).json({
