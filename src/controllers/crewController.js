@@ -137,18 +137,7 @@ const createCrew = async (req, res) => {
       });
     }
 
-    // Проверяем, не является ли бригадир уже членом другой бригады
-    const existingCrew = await trx('Crew')
-      .where('foreman_id', foremanId)
-      .first();
-
-    if (existingCrew) {
-      await trx.rollback();
-      return res.status(400).json({
-        status: 'error',
-        message: 'Этот бригадир уже назначен в другую бригаду.'
-      });
-    }
+    // Бригадир может руководить несколькими бригадами — проверку не делаем
 
     // Создаем бригаду
     const [crewId] = await trx('Crew')
@@ -157,7 +146,7 @@ const createCrew = async (req, res) => {
 
     // Добавляем монтажников
     if (installerIds.length > 0) {
-      // Проверяем, что монтажники существуют и не заняты в других бригадах
+      // Проверяем, что монтажники существуют
       const installers = await trx('Installer')
         .whereIn('installer_id', installerIds)
         .select('installer_id');
@@ -277,19 +266,7 @@ const updateCrew = async (req, res) => {
         });
       }
 
-      // Проверяем, не занят ли бригадир в другой бригаде
-      const existingCrew = await trx('Crew')
-        .where('foreman_id', foremanId)
-        .whereNot('crew_id', id)
-        .first();
-
-      if (existingCrew) {
-        await trx.rollback();
-        return res.status(400).json({
-          status: 'error',
-          message: 'Этот бригадир уже назначен в другую бригаду.'
-        });
-      }
+      // Бригадир может руководить несколькими бригадами — проверку не делаем
 
       await trx('Crew')
         .where('crew_id', id)
