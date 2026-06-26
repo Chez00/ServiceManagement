@@ -12,7 +12,7 @@
     "name": "vue-vendor"
   },
   "index.html": {
-    "file": "assets/index-FHswVfIS.js",
+    "file": "assets/index-pVQ737s8.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -20,7 +20,7 @@
       "_vue-vendor-CM3GskCG.js"
     ],
     "css": [
-      "assets/index-CSZqtrR8.css"
+      "assets/index-DehCBnpr.css"
     ],
     "assets": [
       "assets/bootstrap-icons-mSm7cUeB.woff2",
