@@ -71,17 +71,19 @@ export default {
     },
     
     currentForemanId() {
-      return this.currentUser?.foremanId || 
-             this.currentUser?.foreman_id || 
-             null
+      return this.currentUser?.foremanId || this.currentUser?.foreman_id || null
+    },
+    
+    currentInstallerId() {
+      return this.currentUser?.installerId || this.currentUser?.installer_id || null
+    },
+    
+    currentCustomerId() {
+      return this.currentUser?.customerId || this.currentUser?.customer_id || null
     },
     
     canCreate() {
       return this.isAdmin || this.isCustomer
-    },
-    
-    canEdit() {
-      return this.isAdmin || this.isForeman || this.isCustomer
     },
     
     canDelete() {
@@ -90,10 +92,6 @@ export default {
     
     canChangeStatus() {
       return this.isAdmin || this.isForeman
-    },
-    
-    canChangePerformer() {
-      return this.isAdmin
     },
     
     startItem() {
@@ -133,7 +131,6 @@ export default {
   },
   
   async mounted() {
-    console.log('WorkOrdersPage mounted, user:', this.currentUser?.email, 'roles:', this.userRoles)
     await this.loadSelectData()
     await this.loadWorkOrders()
   },
@@ -154,9 +151,10 @@ export default {
     canEditOrder(order) {
       if (!order) return false
       if (this.isAdmin) return true
-      if (this.isCustomer && order.customer_id === this.currentUser.customerId) return true
+      if (this.isCustomer && order.customer_id === this.currentCustomerId) return true
       if (this.isForeman && order.foreman_id === this.currentForemanId) return true
       if (this.isObserverOfOrder(order)) return true
+      // Монтажник не может редактировать
       return false
     },
     
@@ -164,8 +162,26 @@ export default {
       if (!order) return false
       if (this.isAdmin) return true
       if (this.isObserverOfOrder(order)) return true
+      
+      // Бригадир видит свои заявки
       if (this.isForeman && order.foreman_id === this.currentForemanId) return true
-      if (this.isCustomer && order.customer_id === this.currentUser.customerId) return true
+      
+      // Заказчик видит свои заявки
+      if (this.isCustomer && order.customer_id === this.currentCustomerId) return true
+      
+      // Монтажник видит заявки своей бригады
+      if (this.isInstaller && order.crew_id) {
+        const isInCrew = this.crews.some(crew => {
+          if (crew.crew_id !== order.crew_id) return false
+          if (!crew.installers?.length) return false
+          return crew.installers.some(inst => 
+            inst.installer_id === this.currentInstallerId ||
+            inst.user_id === this.currentUser.id
+          )
+        })
+        if (isInCrew) return true
+      }
+      
       return false
     },
     
@@ -204,6 +220,7 @@ export default {
           promises.push(Promise.resolve({ status: 'success', data: [] }))
         }
         
+        // Бригады нужны админу, бригадиру и монтажнику
         if (this.isAdmin || this.isForeman || this.isInstaller) {
           promises.push(api.getCrews())
         } else {
@@ -217,7 +234,6 @@ export default {
         this.foremen = foremenRes.value?.data || []
         this.users = usersRes.value?.data || []
         
-        // Загружаем бригады с деталями
         const crewsData = crewsRes.value?.data || []
         const detailedCrews = await Promise.allSettled(
           crewsData.map(async (crew) => {
@@ -233,15 +249,8 @@ export default {
           .filter(r => r.status === 'fulfilled')
           .map(r => r.value)
         
-        console.log('✅ Данные загружены:', {
-          categories: this.categories.length,
-          assets: this.assets.length,
-          foremen: this.foremen.length,
-          users: this.users.length,
-          crews: this.crews.length
-        })
       } catch (error) {
-        console.error('❌ Ошибка загрузки данных:', error)
+        console.error('Ошибка загрузки данных:', error)
       }
     },
     
@@ -260,7 +269,7 @@ export default {
           this.pagination = response.data.pagination || this.pagination
         }
       } catch (error) {
-        console.error('❌ Ошибка загрузки заявок:', error)
+        console.error('Ошибка загрузки заявок:', error)
         window.showToast?.('Ошибка загрузки заявок', 'danger')
       } finally {
         this.loading = false
@@ -282,7 +291,6 @@ export default {
       this.currentOrderData = null
       this.viewOnlyMode = false
       this.resetForm()
-      this.errors = {}
       this.showModal()
     },
     
@@ -303,7 +311,7 @@ export default {
         }
         
         if (!this.canEditOrder(order)) {
-          window.showToast?.('У вас нет прав на редактирование этой заявки', 'warning')
+          window.showToast?.('У вас нет прав на редактирование', 'warning')
           return
         }
         
@@ -311,7 +319,7 @@ export default {
         this.viewOnlyMode = false
         this.showModal()
       } catch (error) {
-        console.error('Error opening edit modal:', error)
+        console.error('Error:', error)
         window.showToast?.('Ошибка загрузки заявки', 'danger')
       }
     },
@@ -341,7 +349,7 @@ export default {
         this.viewOnlyMode = true
         this.showModal()
       } catch (error) {
-        console.error('Error opening view modal:', error)
+        console.error('Error:', error)
         window.showToast?.('Ошибка загрузки заявки', 'danger')
       }
     },
@@ -349,13 +357,6 @@ export default {
     fillFormFromOrder(order) {
       this.editingId = order.work_order_id
       this.currentOrderData = { ...order }
-      
-      console.log('📝 Заполнение формы:', {
-        id: order.work_order_id,
-        foreman_id: order.foreman_id,
-        crew_id: order.crew_id,
-        performer_name: order.performer_name
-      })
       
       this.form = {
         name: order.name || '',
@@ -371,13 +372,10 @@ export default {
       }
       
       this.errors = {}
-      
-      // ✅ Находим бригаду исполнителя
       this.findCurrentCrew(order)
     },
     
     findCurrentCrew(order) {
-      // Ищем бригаду по crew_id или foreman_id
       if (order.crew_id) {
         this.currentPerformerCrew = this.crews.find(c => c.crew_id === order.crew_id) || null
       } else if (order.foreman_id) {
@@ -385,8 +383,6 @@ export default {
       } else {
         this.currentPerformerCrew = null
       }
-      
-      console.log('🔍 Бригада исполнителя:', this.currentPerformerCrew?.crew_id || 'не найдена')
     },
     
     showModal() {
@@ -422,29 +418,19 @@ export default {
     },
 
     // ==========================================
-    // ОБРАБОТЧИКИ ИЗМЕНЕНИЙ
+    // ОБРАБОТЧИКИ
     // ==========================================
     
     onForemanChange() {
       const foremanId = this.form.foremanId ? parseInt(this.form.foremanId) : null
-      
-      console.log('🔄 Смена бригадира на:', foremanId)
       
       if (!foremanId) {
         this.currentPerformerCrew = null
         return
       }
       
-      // ✅ Ищем бригаду выбранного бригадира среди ВСЕХ бригад
       const crew = this.crews.find(c => c.foreman_id === foremanId)
-      
-      if (crew) {
-        console.log('✅ Найдена бригада #' + crew.crew_id + ' для бригадира #' + foremanId)
-        this.currentPerformerCrew = { ...crew }
-      } else {
-        console.log('ℹ️ У бригадира #' + foremanId + ' нет бригады')
-        this.currentPerformerCrew = null
-      }
+      this.currentPerformerCrew = crew || null
     },
 
     // ==========================================
@@ -480,40 +466,24 @@ export default {
         }
         
         if (!this.isEditing) {
-          // Создание
           data.status = 'Новая'
           if (this.form.foremanId) {
             data.foremanId = parseInt(this.form.foremanId)
-            // При создании тоже ищем бригаду
             if (this.currentPerformerCrew?.crew_id) {
               data.crewId = this.currentPerformerCrew.crew_id
             }
           }
         } else {
-          // Редактирование
           if (this.canChangeOrderStatus(this.currentOrderData)) {
             data.status = this.form.status
           }
-          
-          if (this.canChangePerformer) {
-            const newForemanId = this.form.foremanId ? parseInt(this.form.foremanId) : null
-            const oldForemanId = this.currentOrderData?.foreman_id
-            
-            // Отправляем foremanId только если он изменился
-            if (newForemanId !== oldForemanId) {
-              data.foremanId = newForemanId
-            }
-          }
         }
         
-        // Наблюдатели
         if (this.isAdmin || this.isForeman || (this.isCustomer && !this.isEditing)) {
           data.observerIds = (this.form.observerIds || [])
             .filter(Boolean)
             .map(id => parseInt(id))
         }
-        
-        console.log('💾 Отправка данных:', data)
         
         let response
         if (this.isEditing) {
@@ -527,12 +497,11 @@ export default {
           this.hideModal()
           await this.loadWorkOrders()
         } else {
-          throw new Error(response?.message || 'Операция не выполнена')
+          throw new Error(response?.message || 'Ошибка')
         }
       } catch (error) {
         const message = error.response?.data?.message || error.message || 'Неизвестная ошибка'
-        console.error('❌ Ошибка сохранения:', message)
-        window.showToast?.('Ошибка сохранения: ' + message, 'danger')
+        window.showToast?.('Ошибка: ' + message, 'danger')
       } finally {
         this.saving = false
       }
@@ -540,20 +509,18 @@ export default {
     
     async deleteOrder(id) {
       if (!this.canDelete) {
-        window.showToast?.('У вас нет прав на удаление заявок', 'warning')
+        window.showToast?.('Нет прав на удаление', 'warning')
         return
       }
       
-      if (!confirm(`Удалить заявку #${id}? Это действие нельзя отменить.`)) return
+      if (!confirm(`Удалить заявку #${id}?`)) return
       
       try {
-        const response = await api.deleteWorkOrder(id)
-        if (response?.status === 'success') {
-          window.showToast?.('Заявка удалена', 'success')
-          await this.loadWorkOrders()
-        }
+        await api.deleteWorkOrder(id)
+        window.showToast?.('Заявка удалена', 'success')
+        await this.loadWorkOrders()
       } catch (error) {
-        const message = error.response?.data?.message || error.message || 'Ошибка удаления'
+        const message = error.response?.data?.message || error.message || 'Ошибка'
         window.showToast?.(message, 'danger')
       }
     },
@@ -698,7 +665,7 @@ export default {
       </div>
     </div>
 
-    <!-- Таблица заявок -->
+    <!-- Таблица -->
     <div class="card border-0 shadow-sm">
       <div class="table-responsive">
         <table class="table table-hover mb-0 align-middle">
@@ -746,7 +713,6 @@ export default {
               <td>
                 <div>
                   <small>{{ order.performer_name || 'Не назначен' }}</small>
-                  <!-- ✅ Отображаем бригаду если есть -->
                   <span v-if="order.crew_id" class="badge bg-success ms-1" title="Бригада">
                     <i class="bi bi-people"></i> #{{ order.crew_id }}
                   </span>
@@ -761,14 +727,25 @@ export default {
               </td>
               <td>
                 <div class="btn-group btn-group-sm">
+                  <!-- Редактирование (не для монтажника) -->
                   <button v-if="!isInstaller && canEditOrder(order)"
                           class="btn btn-outline-primary" @click="openEditModal(order.work_order_id)" title="Редактировать">
                     <i class="bi bi-pencil"></i>
                   </button>
-                  <button v-else-if="canViewOrder(order)"
+                  
+                  <!-- Просмотр для монтажника -->
+                  <button v-if="isInstaller && canViewOrder(order)"
+                          class="btn btn-outline-info" @click="openViewModal(order.work_order_id)" title="Просмотр">
+                    <i class="bi bi-eye"></i>
+                  </button>
+                  
+                  <!-- Просмотр для остальных -->
+                  <button v-else-if="!isInstaller && canViewOrder(order) && !canEditOrder(order)"
                           class="btn btn-outline-secondary" @click="openViewModal(order.work_order_id)" title="Просмотр">
                     <i class="bi bi-eye"></i>
                   </button>
+                  
+                  <!-- Удаление -->
                   <button v-if="canDelete" class="btn btn-outline-danger" 
                           @click="deleteOrder(order.work_order_id)" title="Удалить">
                     <i class="bi bi-trash"></i>
@@ -857,23 +834,22 @@ export default {
                 <div class="invalid-feedback">{{ errors.assetId }}</div>
               </div>
               
-              <!-- Исполнитель (бригадир) -->
+              <!-- Исполнитель -->
               <div class="col-md-6">
                 <label class="form-label">
                   Исполнитель (бригадир)
-                  <span v-if="!canChangePerformer && isEditing" class="text-muted small">(только для администратора)</span>
+                  <span v-if="isEditing" class="text-muted small">(нельзя изменить)</span>
                 </label>
                 <select v-model="form.foremanId" class="form-select"
-                        :disabled="viewOnlyMode || (isEditing && !canChangePerformer)"
+                        :disabled="viewOnlyMode || isEditing"
                         @change="onForemanChange">
                   <option value="">Не назначен</option>
-                  <!-- ✅ Выводим ВСЕХ бригадиров -->
                   <option v-for="foreman in foremen" :key="foreman.foreman_id" :value="foreman.foreman_id">
                     {{ getFullName(foreman) }}
                   </option>
                 </select>
                 
-                <!-- ✅ Отображение бригады выбранного бригадира -->
+                <!-- Бригада -->
                 <div v-if="currentPerformerCrew && form.foremanId" class="mt-2">
                   <div class="card bg-success bg-opacity-10 border-success">
                     <div class="card-body py-2 px-3">
@@ -887,18 +863,15 @@ export default {
                           <div v-if="currentPerformerCrew.installers?.length" class="small text-muted">
                             Монтажники: {{ currentPerformerCrew.installers.map(i => getFullName(i)).join(', ') }}
                           </div>
-                          <div v-if="currentPerformerCrew.installer_count" class="small text-muted">
-                            Всего монтажников: {{ currentPerformerCrew.installer_count }}
-                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
-                <div v-else-if="form.foremanId && !currentPerformerCrew" class="mt-2">
+                <div v-else-if="form.foremanId && !currentPerformerCrew && !isEditing" class="mt-2">
                   <div class="alert alert-warning py-2 mb-0">
                     <i class="bi bi-exclamation-triangle me-1"></i>
-                    <small>У этого бригадира нет бригады. Он будет назначен без бригады.</small>
+                    <small>У этого бригадира нет бригады.</small>
                   </div>
                 </div>
               </div>
@@ -937,7 +910,7 @@ export default {
               <div class="col-md-6" v-if="isAdmin || isForeman">
                 <label class="form-label">Наблюдатели</label>
                 <div class="border rounded p-2" style="max-height: 150px; overflow-y: auto;">
-                  <div v-if="users.length === 0" class="text-muted p-2">Нет доступных пользователей</div>
+                  <div v-if="users.length === 0" class="text-muted p-2">Нет пользователей</div>
                   <div v-for="user in users" :key="user.user_id" class="form-check">
                     <input type="checkbox" class="form-check-input" :id="'obs_' + user.user_id"
                            :value="user.user_id" v-model="form.observerIds" :disabled="viewOnlyMode">
