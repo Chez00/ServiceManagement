@@ -201,7 +201,7 @@ export default {
           phone: this.form.phone ? this.form.phone.trim() : undefined,
           position: this.form.position || undefined,
           departmentId: this.form.departmentId || null,
-          roles: [...this.form.roles] // ✅ Отправляем роли вместе с основными данными
+          //roles: [...this.form.roles] // ✅ Отправляем роли вместе с основными данными
         }
         
         if (this.form.password) {
