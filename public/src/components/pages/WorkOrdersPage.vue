@@ -153,7 +153,7 @@ export default {
       if (this.isAdmin) return true
       if (this.isCustomer && order.customer_id === this.currentCustomerId) return true
       if (this.isForeman && order.foreman_id === this.currentForemanId) return true
-      if (this.isObserverOfOrder(order)) return true
+      if (this.isObserverOfOrder(order)) return false
       // Монтажник не может редактировать
       return false
     },
